@@ -1,0 +1,31 @@
+{
+  "name": "ytbdownload",
+  "version": "1.0.0",
+  "description": "Baixa musicas do Youtube Music!",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "author": "HellFiveOsborn",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^8.4.0",
+    "dotenv": "^16.0.3",
+    "sharp": "^0.32.3",
+    "telegraf": "^4.12.2"
+  },
+  "os": [
+    "win32",
+    "linux",
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "ia32"
+  ],
+  "required": {
+    "ffmpeg": true,
+    "ffprobe": true,
+    "yt-dlp": true
+  }
+}
