@@ -21,7 +21,8 @@ Esse é um bot do Telegram para baixar músicas do YouTube Music.
 ```bash
 git clone https://github.com/HellFiveOsborn/ytbdownloadbot
 cd ytbdownloadbot
-yarn ou npm install
+```
+`yarn` ou `npm install`
 
 Crie um arquivo `.env` com a chave de API do seu bot:
 `BOT_TOKEN=SEU_TOKEN_AQUI`
