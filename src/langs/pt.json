@@ -1,0 +1,38 @@
+{
+    "welcome": "👋 Olá *:name*, seja bem-vindo! Envie o link do vídeo/música que deseja baixar:",
+    "select_lang": "Selecione um idioma:",
+    "selected_lang": ":lang foi setado com sucesso!",
+    "invalid_link": "⚠️ Por favor, envie um link válido do YouTube/Music.\nEx: `https://music.youtube.com/watch?v=hqGOsVJ7hWg`",
+    "time_exceeded": "⚠️ O vídeo possui mais de :minute minutos de duração!",
+    "waiting_for_info": "🔍 Obtendo informações...",
+    "waiting_qualities": "🧮 Obtendo qualidades...",
+    "error_get_qualities": "❌ Ocorreu um erro, ao obter a lista de qualidades.",
+    "expire_link_cache": "⌛️ Video expirado, envie o link novamente!",
+    "select_quality": "Selecione a qualidade:",
+    "downloading": "📥 Baixando...",
+    "downloading_progress": "📥 Baixando... :progress% | :megabytes\n\nAumente a velocidade dos seus downloads, seja VIP [entrando no canal](https://t.me/HellFiveOsbornCanal)",
+    "downloading_progress_vip": "📥 Baixando... :progress% | :megabytes",
+    "converting": "🔄 Convertendo... :progress%",
+    "share_this_bot": "⭐️ Compartilhar bot",
+    "error_upload": "❌ Ocorreu um erro, ao fazer upload da media!",
+    "process_exceeded": "Você já possui :count processos de download na fila.\nAguarde-os terminarem.",
+    "in_process": "⏳ Já em processo, por favor aguarde a finalização!",
+    "share_link": "https://t.me/share/url?url=https://t.me/:username&text=📥 Baixe vídeos/músicas com o Youtube Music Bot",
+    "finish_process": "Todos os processos foram finalizados! ✔️",
+    "you_banned": "❗️Você foi banido!",
+    "help": "🎵 *Youtube Music Bot - Download de Músicas e Vídeos* 📽️\n\nCom o Youtube Music Bot, você pode fazer o seguinte:\n\n— *Baixar Músicas em Ótima Qualidade:* Baixe suas faixas favoritas do YouTube Music em alta qualidade de áudio.\n\n— *Baixar Vídeos em MP4/MKV:* Faça o download de vídeos do YouTube em formatos de vídeo MP4 ou MKV.\n\n— *Baixar Vídeos e Convertê-los para MP3/M4A:* Transforme vídeos em arquivos de áudio no formato MP3 ou M4A.\n\nAlém disso:\n\n✨ *Torne-se VIP:* Junte-se ao canal @HellFiveOsbornCanal para se tornar um VIP e acelerar seus downloads.\n\n⏰ *Limite de Duração:* No momento, é possível baixar vídeos com até 12 minutos de duração.\n\n✂️ *Limpeza de Processos:* Utilize o comando /kill para encerrar todos os processos em andamento.\n\n🌐 *Troque o Idioma:* Mude o idioma do bot a qualquer momento com o comando /lang.\n\nAproveite o Youtube Music Bot para baixar e curtir suas músicas e vídeos favoritos! 🎶📺",
+    "commands": [
+        {
+            "command": "lang",
+            "description": "Alterar o idioma"
+        },
+        {
+            "command": "help",
+            "description": "Informações de ajuda"
+        },
+        {
+            "command": "kill",
+            "description": "Encerrar um processo pendente!"
+        }
+    ]
+}

@@ -1,0 +1,38 @@
+{
+    "welcome": "👋 Hello *:name*, welcome! Send the link of the video/music you want to download:",
+    "select_lang": "Select a language:",
+    "selected_lang": ":lang has been set successfully!",
+    "invalid_link": "⚠️ Please send a valid YouTube/Music link.\nExample: `https://music.youtube.com/watch?v=hqGOsVJ7hWg`",
+    "time_exceeded": "⚠️ The video is longer than :minute minutes!",
+    "waiting_for_info": "🔍 Getting information...",
+    "waiting_qualities": "🧮 Getting qualities...",
+    "error_get_qualities": "❌ An error occurred while getting the list of qualities.",
+    "expire_link_cache": "⌛️ Video has expired, please send the link again!",
+    "select_quality": "Select quality:",
+    "downloading": "📥 Downloading...",
+    "downloading_progress": "📥 Downloading... :progress% | :megabytes\n\nBoost the speed of your downloads, become a VIP by [joining the channel](https://t.me/HellFiveOsbornCanal).",
+    "downloading_progress_vip": "📥 Downloading... :progress% | :megabytes",
+    "converting": "🔄 Converting... :progress%",
+    "share_this_bot": "⭐️ Share this bot",
+    "error_upload": "❌ An error occurred while uploading the media!",
+    "process_exceeded": "You already have :count download processes in the queue.\nPlease wait for them to finish.",
+    "in_process": "⏳ Already in progress, please wait for completion!",
+    "share_link": "https://t.me/share/url?url=https://t.me/:username&text=📥 Download videos/music with Youtube Music Bot",
+    "finish_process": "All processes have been completed! ✔️",
+    "you_banned": "❗️You have been banned!",
+    "help": "🎵 *Youtube Music Bot - Music and Video Download* 📽️\n\nWith the Youtube Music Bot, you can do the following:\n\n— *Download High-Quality Music:* Download your favorite tracks from YouTube Music in high-quality audio.\n\n— *Download Videos in MP4/MKV:* Download YouTube videos in MP4 or MKV video formats.\n\n— *Download Videos and Convert to MP3/M4A:* Turn videos into audio files in MP3 or M4A format.\n\nAdditionally:\n\n✨ *Become a VIP:* Join the @HellFiveOsbornCanal channel to become a VIP and speed up your downloads.\n\n⏰ *Duration Limit:* Currently, you can download videos with a maximum duration of 12 minutes.\n\n✂️ *Process Cleanup:* Use the /kill command to terminate all ongoing processes.\n\n🌐 *Change Language:* Change the bot's language anytime with the /lang command.\n\nEnjoy the Youtube Music Bot to download and enjoy your favorite music and videos! 🎶📺",
+    "commands": [
+        {
+            "command": "lang",
+            "description": "Change language"
+        },
+        {
+            "command": "help",
+            "description": "Help information"
+        },
+        {
+            "command": "kill",
+            "description": "Terminate a pending process!"
+        }
+    ]
+}

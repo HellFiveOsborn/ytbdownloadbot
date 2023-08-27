@@ -1,38 +1,26 @@
 require('dotenv').config();
 
-const Database = require('better-sqlite3');
-
-// Abre o banco de dados SQLite
-const db = new Database('database.db');
+const { saveLog, env } = require('./src/module/functions');
 const TelegramBot = require('./src/telegram/bot');
 
+// Defina a função global para tratamento de exceções
+process.on('uncaughtException', (error) => {
+    const report = error.stack || error;
+
+    // Registre a exceção em seus logs usando saveLog
+    saveLog(report, 'errors');
+
+    const bot = (new TelegramBot()).instance();
+
+    // Reporta o erro ao admin
+    bot.telegram.sendMessage(env('canais_permitidos')[2], `<b>Error reportado:</b> <code>${report}</code>`, {
+        parse_mode: 'HTML'
+    })
+
+    // Encerre o processo, pois ocorreu uma exceção não tratada
+    // process.exit(1);
+});
+
 // Run's
-const Telegram = new TelegramBot(db);
+const Telegram = new TelegramBot();
 Telegram.run(false);
-
-
-// // Cria a tabela "usuarios"
-// db.exec(`
-//   CREATE TABLE IF NOT EXISTS usuarios (
-//     chat_id INTEGER PRIMARY KEY NOT NULL,
-//     lang TEXT,
-//     registro TIMESTAMP,
-//     status INTEGER
-//   )
-// `);
-
-// // Cria a tabela "musicas"
-// db.exec(`
-//   CREATE TABLE IF NOT EXISTS musicas (
-//     chat_id INTEGER NOT NULL,
-//     user_id INTEGER NOT NULL,
-//     file_id TEXT NOT NULL,
-//     ytb_id TEXT NOT NULL,
-//     reqs INTEGER DEFAULT 0,
-//     registro TIMESTAMP,
-//     FOREIGN KEY (user_id) REFERENCES usuarios(chat_id)
-//   )
-// `);
-
-// // Fecha a conexão com o banco de dados (opcional)
-// db.close();
