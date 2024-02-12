@@ -1,177 +1,63 @@
-const Database = require('better-sqlite3');
 const fs = require('fs');
-const path = require('path');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
 const { spawn } = require('child_process');
-
-const db = new Database(resolve_path('database/bot.sqlite'));
-
-/**
- * FUNÇÕES DATABASE
- */
-
-/**
- * Função para adicionar +1 download a uma música
- * 
- * @param {import('better-sqlite3').Database} db 
- * @param {string} fileId 
- * @returns {integer}
- */
-function incDownload(fileId) {
-    // Atualize o número de downloads diretamente no banco de dados usando uma única instrução SQL
-    const result = db.prepare(`
-        UPDATE musicas
-        SET downloads = downloads + 1
-        WHERE file_id = ?
-    `).run(fileId);
-
-    // Verifique se a atualização foi bem-sucedida e retorne o novo total de downloads
-    if (result.changes > 0) {
-        const totalDownloads = db.prepare(`
-            SELECT downloads
-            FROM musicas
-            WHERE file_id = ?
-        `).get(fileId);
-
-        return totalDownloads ? totalDownloads.downloads : 0;
-    }
-
-    return 0; // Se a atualização não foi bem-sucedida, retorne 0
-}
-
-function saveAudioDb(chatId, userId, fileId, ytbId, metadata, capaPath) {
-    try {
-        // Ler a imagem da capa em um buffer
-        const capaBuffer = fs.readFileSync(capaPath);
-
-        // Converter o buffer da capa para base64
-        const capaBase64 = capaBuffer.toString('base64');
-
-        // Prepare a inserção na tabela "musicas"
-        const stmt = db.prepare(`
-            INSERT INTO musicas (chat_id, user_id, file_id, ytb_id, downloads, metadata, thumbnail, registro)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        // Executar a inserção
-        stmt.run(chatId, userId, fileId, ytbId, 1, JSON.stringify(metadata), capaBase64, new Date().toISOString());
-
-        return true; // Retorna true se a inserção for bem-sucedida
-    } catch (error) {
-        console.error("Erro ao registrar áudio na tabela 'musicas':", error);
-        return false; // Retorna false em caso de erro
-    }
-}
-/**
- * Banir ou desbanir um chat_id.
- * 
- * @param {number} chat_id O ID do chat a ser banido ou desbanido
- * @param {boolean} ban Define se o chat deve ser banido (true) ou desbanido (false)
- * @returns {number} O novo status (0 para banido, 1 para desbanido)
- */
-function banOrUnban(chat_id, ban = false) {
-    try {
-        // Determine o novo status com base na ação de banir ou desbanir
-        const newStatus = ban ? 0 : 1;
-
-        // Atualize o status do chat_id no banco de dados
-        db.prepare('UPDATE usuarios SET status = ? WHERE chat_id = ?').run(newStatus, chat_id);
-
-        return newStatus;
-    } catch (error) {
-        console.error(error);
-        return -1; // Retorne -1 em caso de erro
-    }
-}
-
-/**
- * FUNÇÕES EXTENDS TELEGRAM
- */
+const path = require('path');
+const redisClient = require('./redisClient');
 
 /**
  * Captura o tipo de update (usuário, canal, grupo) a partir do contexto.
  * 
  * @param {import('telegraf').Context} ctx 
- * @returns {string} - O tipo de update ("private" para usuário, "channel" para canal, "group" para grupo).
+ * @returns {string|null} - O tipo de update ("private" para usuário, "channel" para canal, "group" para grupo).
  */
 function updateTypeOrigin(ctx) {
-    const updateType = ctx.updateType;
-
-    if (updateType === 'message') {
-        if (ctx.message.chat.type === 'private') {
-            return 'private'; // Usuário
-        } else if (ctx.message.chat.type === 'channel_post') {
-            return 'channel'; // Canal
-        } else if (ctx.message.chat.type === 'group') {
-            return 'group'; // Grupo
-        }
-    } else if (updateType === 'channel_post') {
-        return 'channel';
-    } else if (updateType === 'callback_query') {
-        if (ctx.callbackQuery.message.chat.type === 'private') {
-            return 'private'; // Usuário
-        } else if (ctx.callbackQuery.message.chat.type === 'channel_post') {
-            return 'channel'; // Canal
-        } else if (ctx.callbackQuery.message.chat.type === 'group') {
-            return 'group'; // Grupo
-        }
+    switch (ctx.updateType) {
+        case 'message':
+        case 'edited_message':
+        case 'callback_query':
+            return ctx.message?.chat.type || ctx.callbackQuery?.message.chat.type;
+        case 'inline_query':
+        case 'chosen_inline_result':
+            return 'inline';
+        case 'channel_post':
+        case 'edited_channel_post':
+            return 'channel';
+        case 'shipping_query':
+        case 'pre_checkout_query':
+            return 'shopping';
+        case 'poll':
+        case 'poll_answer':
+            return 'poll';
+        case 'chat_member':
+        case 'my_chat_member':
+        case 'chat_join_request':
+            return 'chat_member';
+        default:
+            return null;
     }
-
-    return null; // Tipo desconhecido
 }
 
 /**
- * Verifica se o usuário está em um grupo ou canal.
+ * Verifica assincronamente se o usuário está no grupo e/ou canal especificados pelas variáveis de ambiente.
+ * Se ambas as variáveis JOIN_GROUP e JOIN_CHANNEL estiverem definidas, é obrigatório estar em ambos.
+ * Se apenas uma estiver definida, verifica somente a definida.
  * @param {import('telegraf').Context} ctx - O contexto Telegraf.
- * @param {number} userId - O ID do usuário a ser verificado.
- * @returns {boolean} Uma função de retorno que recebe um argumento booleano (true se o usuário estiver no grupo/canal, caso contrário, false).
+ * @returns {Promise<boolean>} Retorna true se o usuário for membro do grupo ou canal especificado, false caso contrário.
  */
 async function isUserInGroupOrChannel(ctx) {
-    const chat_id = env('canais_permitidos')[0];
-    const chatMember = await ctx.telegram.getChatMember(chat_id, ctx.from.id);
-    const isMember = chatMember && chatMember.status !== 'left' && chatMember.status !== 'kicked';
+    const checkMembership = async (chatId) => {
+        if (!chatId) return false;
+        const status = ['left', 'restricted', 'kicked'];
+        const memberStatus = await ctx.telegram.getChatMember(chatId, ctx.from.id);
+        return memberStatus && !status.includes(memberStatus.status);
+    };
 
-    return isMember;
-}
+    const groupId = env('JOIN_GROUP'), channelId = env('JOIN_CHANNEL');
+    const groupCheck = await checkMembership(groupId);
+    const channelCheck = await checkMembership(channelId);
 
-/**
- * Verifica se o usuário já existe no banco de dados e retorna seus dados se necessário.
- * 
- * @param {import('telegraf').Context} ctx 
- * @param {import('better-sqlite3').Database} db 
- * @returns {Object|null} - Os dados do usuário se existirem, caso contrário, null.
- */
-function usuario(ctx) {
-    // Verifica se o usuário é um usuário legítimo (não bot, canal ou grupo)
-    if (updateTypeOrigin(ctx) === 'private') {
-        const chat_id = ctx.from.id;
-        const lang = ctx.from.language_code ?? 'en';
-
-        // Verifica se o usuário já existe no banco de dados
-        const user = db.prepare('SELECT * FROM usuarios WHERE chat_id = ?')
-            .get(chat_id);
-
-        if (!user) {
-            // Se o usuário não existe, registra o novo usuário no banco de dados
-            const result = db.prepare('INSERT INTO usuarios (chat_id, lang, registro, status) VALUES (?, ?, ?, ?)')
-                .run(chat_id, lang, (new Date().toISOString()), 1);
-
-            if (result.changes > 0) {
-                // Registro bem-sucedido, agora obtenha os dados do usuário registrado
-                return {
-                    chat_id,
-                    lang,
-                    registro: (new Date().toISOString()),
-                    status: 1
-                };
-            }
-        }
-
-        // Retorna os dados do usuário se existirem, caso contrário, retorna null
-        return user || null;
-    } else {
-        // Se não for um usuário legítimo, retorna null
-        return null;
-    }
+    return groupId && channelId ? groupCheck && channelCheck : groupCheck || channelCheck;
 }
 
 /**
@@ -179,66 +65,88 @@ function usuario(ctx) {
  * @param {import('telegraf').Context} ctx - O contexto Telegraf.
  * @param {number} messageId - O ID da mensagem a ser editada (ou 0 para enviar uma nova mensagem).
  * @param {string} text - O texto da mensagem.
- * @param {object} extraParams - Parâmetros extras para a mensagem (por exemplo, parse_mode).
- * @returns {Promise<number>} - O ID da mensagem editada ou da nova mensagem enviada.
+ * @param {import('telegraf/typings/telegram-types').ExtraEditMessageText} extraParams - Parâmetros extras para a mensagem (por exemplo, parse_mode).
+ * @param {boolean} useCache - Se verdadeiro, tenta obter e salvar o messageId no Redis.
+ * @param {string} customCacheKey - O nome do cache para salvar o messageId.
+ * @returns {Promise<object>} - O ID da mensagem editada ou da nova mensagem enviada.
  */
-async function editOrSendMessage(ctx, messageId = null, text, extraParams = {}) {
+async function editOrSendMessage(ctx, messageId = null, text, extraParams = {}, useCache = false, customCacheKey = null) {
+    const chatId = ctx.chat.id;
+    const cacheKey = useCache && customCacheKey != null ? customCacheKey : `LAST_MSG:${chatId}`;
+    let resultMessage;
+
     if (!extraParams.hasOwnProperty('parse_mode')) {
         extraParams.parse_mode = 'Markdown';
     }
-    try {
-        if (messageId !== null) {
-            // Tenta editar a mensagem existente
-            const editedMessage = await ctx.telegram.editMessageText(ctx.chat.id, messageId, null, text, { ...extraParams });
-            return editedMessage.message_id;
-        } else {
-            // Se o messageId não for especificado ou for zero, envia uma nova mensagem
-            const sentMessage = await ctx.telegram.sendMessage(ctx.chat.id, text, extraParams);
-            return sentMessage.message_id;
-        }
-    } catch (error) {
-        // Se a edição falhar, envia uma nova mensagem
-        const sentMessage = await ctx.telegram.sendMessage(ctx.chat.id, text, extraParams);
-        return sentMessage.message_id;
+
+    if (useCache && messageId === null) {
+        messageId = await redisRecovery(cacheKey);
     }
+
+    try {
+        resultMessage = await ctx.telegram.editMessageText(chatId, messageId, null, text, extraParams);
+    } catch (error) {
+        resultMessage = await ctx.reply(text, extraParams);
+        Logger.save(error, 'error');
+    }
+
+    if (useCache) {
+        await redisClient.setEx(cacheKey, 60, resultMessage?.message_id.toString());
+    }
+
+    return resultMessage;
+}
+
+/**
+ * Edita o texto e/ou a marcação de resposta de uma mensagem existente. Se a mensagem não existir, envia uma nova.
+ * @param {import('telegraf').Context} ctx - O contexto Telegraf.
+ * @param {number|null} messageId - O ID da mensagem a ser editada. Se for null, uma nova mensagem será enviada.
+ * @param {string} text - O texto da mensagem para novas mensagens.
+ * @param {import('telegraf/typings/telegram-types').ExtraEditMessageText} extraParams - Parâmetros extras para a mensagem ou marcação de resposta (inclui inline_keyboard no markup).
+ * @param {boolean} useCache - Se verdadeiro, tenta obter e salvar o messageId no Redis.
+ * @param {string} customCacheKey - O nome do cache para salvar o messageId.
+ * @returns {Promise<object>} - O resultado da mensagem editada ou da nova mensagem enviada.
+ */
+async function editReplyMarkupOrSend(ctx, messageId = null, text, extraParams = {}, useCache = false, customCacheKey = null) {
+    const chatId = ctx.chat.id;
+    const cacheKey = useCache && customCacheKey != null ? customCacheKey : `LAST_MSG:${chatId}`;
+    let resultMessage;
+
+    extraParams.parse_mode = extraParams.parse_mode || 'Markdown';
+
+    if (useCache && messageId === null) {
+        messageId = await redisClient.get(cacheKey); // Tentativa de obter o messageId do cache
+    }
+
+    resultMessage = await editOrSendMessage(ctx, messageId, text, { ...extraParams, reply_markup: ctx.callbackQuery?.message?.reply_markup || {} }, true, customCacheKey)
+        .then(async (response) => await ctx.editMessageReplyMarkup(extraParams.reply_markup));
+
+    if (useCache) {
+        await redisClient.setEx(cacheKey, 60, resultMessage.message_id.toString());
+    }
+
+    return resultMessage;
 }
 
 /**
  * Tenta enviar uma foto usando sendPhoto. Se não for possível, envia uma mensagem com um link que cria um preview da imagem.
  * @param {import('telegraf').Context} ctx - O contexto Telegraf.
  * @param {string} photoUrl - A URL da foto.
- * @param {object} options - Opções adicionais para a mensagem, como caption, parse_mode, etc.
+ * @param {object} extraParams - Opções adicionais para a mensagem, como caption, parse_mode, etc.
  * @returns {Promise<number>} - O ID da mensagem enviada.
  */
-async function sendPhotoOrMessage(ctx, photoUrl, options = {}) {
-    if (!options.hasOwnProperty('parse_mode')) {
-        options.parse_mode = 'Markdown';
-    }
+async function sendPhotoOrMessage(ctx, photoUrl, extraParams = {}) {
+    extraParams.parse_mode = extraParams.parse_mode || 'Markdown';
 
     try {
-        // Tenta enviar a foto usando sendPhoto
-        const sentPhoto = await ctx.telegram.sendPhoto(ctx.chat.id, photoUrl, options);
-        return sentPhoto.message_id;
+        // Tenta enviar a foto
+        return await ctx.telegram.sendPhoto(ctx.chat.id, photoUrl, extraParams);
     } catch (error) {
-        // Se não for possível enviar a foto, cria um link de preview da imagem
-        const photoLink = options.parse_mode ?
-            options.parse_mode === 'HTML' ?
-                `<a href="${photoUrl}">ㅤ</a>` : `[ㅤ](${photoUrl})`
-            : `[ㅤ](${photoUrl})`;
-
-        const caption = options.caption || '';
-
-        const messageText = caption + photoLink;
-
-        delete options.caption;
-
-        const messageOptions = {
-            ...options,
-        };
-
-        const sentMessage = await ctx.telegram.sendMessage(ctx.chat.id, messageText, messageOptions);
-
-        return sentMessage.message_id;
+        Logger.save(error, 'error');
+        // Se a foto não puder ser enviada, envia como mensagem com link da foto
+        const photoLink = extraParams.parse_mode === 'HTML' ? `<a href="${photoUrl}">&#8203;</a>` : `[&#8203;](${photoUrl})`;
+        const messageText = (extraParams.caption ? extraParams.caption + ' ' : '') + photoLink;
+        return await ctx.telegram.sendMessage(ctx.chat.id, messageText, extraParams);
     }
 }
 
@@ -246,67 +154,45 @@ async function sendPhotoOrMessage(ctx, photoUrl, options = {}) {
  * Envia um áudio ou vídeo com opções personalizadas e suporta botões inline.
  * @param {import('telegraf').Context} ctx - O contexto da mensagem.
  * @param {string} fileSource - A fonte do arquivo (URL ou caminho do arquivo local).
- * @param {object} options - Opções personalizadas para a mensagem.
+ * @param {import('telegraf/typings/telegram-types').ExtraVideo} extraParams - Opções personalizadas para a mensagem.
+ * @param {string} [extraParams.caption] - Legenda da mensagem.
+ * @param {string} [extraParams.parse_mode] - Modo de formatação da mensagem.
+ * @param {number} [extraParams.duration] - Duração do áudio/vídeo.
+ * @param {string} [extraParams.performer] - Intérprete do áudio.
+ * @param {string} [extraParams.title] - Título do áudio.
+ * @param {number} [extraParams.width] - Largura do vídeo.
+ * @param {number} [extraParams.height] - Altura do vídeo.
+ * @param {boolean} [extraParams.supports_streaming] - Se o vídeo suporta streaming.
+ * @param {boolean} [extraParams.thumbnail.source] - Thumbnail para audios.
  * @returns {Promise} Uma promessa que é resolvida quando a mensagem é enviada.
  */
-async function sendAudioOrVideo(ctx, fileSource, options = {}) {
-    // Extensões suportadas para áudio e vídeo
-    const audioExtensions = ['.mp3', '.m4a', '.wav'];
-    const videoExtensions = ['.mp4', '.mkv'];
-
-    // Verifica a extensão do arquivo
-    const isAudio = audioExtensions.some(ext => fileSource.endsWith(ext));
-    const isVideo = videoExtensions.some(ext => fileSource.endsWith(ext));
-
-    const typing = isAudio ? 'upload_voice' : isVideo ? 'upload_video' : '';
-
-    return ctx.persistentChatAction(typing, async () => {
-        try {
-            if (!options.hasOwnProperty('parse_mode')) {
-                options.parse_mode = 'Markdown';
-            }
-
-            if (isVideo) {
-                // Se for um vídeo, envie usando sendVideo
-                return await ctx.telegram.sendVideo(ctx.chat.id, {
-                    source: fileSource
-                }, options);
-            } else if (isAudio) {
-                // Se for áudio, envie como áudio usando sendAudio
-                return await ctx.telegram.sendAudio(ctx.chat.id, {
-                    source: fileSource
-                }, options);
-            } else {
-                // Trate outros tipos de arquivos aqui, se necessário
-                throw new Error('Tipo de arquivo não suportado.');
-            }
-        } catch (error) {
-            // Lida com erros aqui, se necessário
-            saveLog(error, 'errors')
-            throw error;
-        }
-    });
-}
-
-
-/**
- * Verifica se um usuário está banido com base no campo "status".
- * 
- * @param {import('telegraf').Context} ctx 
- * @param {import('better-sqlite3').Database} db 
- * @returns {boolean} - true se o usuário estiver banido, false caso contrário.
- */
-function isBanned(ctx, db) {
-    const userData = usuario(ctx)
-
-    // Verifica se o usuário existe no banco de dados
-    if (userData) {
-        // Verifica se o usuário está banido com base no campo "status"
-        return userData.status === 0;
+async function sendAudioOrVideo(ctx, fileSource, extraParams = {}) {
+    const isFileId = typeof fileSource === 'string' && !fileSource.includes('.');
+    let method, chatAction;
+    if (isFileId) {
+        method = 'sendAudio', chatAction = 'upload_voice';
+    } else {
+        const ext = fileSource.slice(-4).toLowerCase();
+        if (['.mp3', '.m4a', '.wav'].includes(ext)) method = 'sendAudio', chatAction = 'upload_voice';
+        else if (['.mp4', '.mkv'].includes(ext)) method = 'sendVideo', chatAction = 'upload_video';
+        else throw new Error('Tipo de arquivo não suportado.');
     }
 
-    // Se o usuário não existir, consideramos que ele não está banido
-    return false;
+    try {
+        let response;
+
+        await ctx.sendChatAction(chatAction)
+            .then(async () => {
+                extraParams.parse_mode = extraParams.parse_mode || 'Markdown';
+                const payload = isFileId ? fileSource : { source: fileSource };
+                response = await ctx.telegram[method](ctx.chat.id, payload, extraParams);
+            });
+
+        return response;
+    } catch (error) {
+        Logger.save(error, 'error');
+        throw error;
+    }
 }
 
 /**
@@ -323,97 +209,145 @@ function sleep(ms) {
 }
 
 /**
- * Função para obter valores de variáveis de ambiente com conversão.
- *
- * @param {string} key - A chave da variável de ambiente que deseja acessar.
- * @returns {string|number|object|array|undefined} - O valor da variável de ambiente, convertido para o tipo apropriado,
- * ou undefined se a variável não estiver definida.
+ * Armazena ou busca um valor no Redis, com suporte opcional a expiração.
+ * 
+ * @param {string} key Chave sob a qual o valor será armazenado ou buscado no Redis.
+ * @param {Function} callback Função que retorna o valor a ser armazenado caso não exista no Redis.
+ * @param {number|Date|null} expiration Expiração do cache em segundos, uma instância de Date, ou null para sem expiração.
+ * @returns {Promise<any>} O valor buscado do cache ou o valor retornado pelo callback.
  */
-function env(key) {
-    const envValue = process.env[key];
-
-    if (envValue === undefined) {
-        return undefined; // Retorna undefined se a variável de ambiente não estiver definida
-    }
-
-    // Verifica se o valor é uma string representando um array
-    if (envValue.startsWith('[') && envValue.endsWith(']')) {
+async function redisRemember(key, callback, expiration = null) {
+    let cachedValue = await redisClient.get(key);
+    if (cachedValue) {
         try {
-            // Tenta analisar o valor como JSON
-            return JSON.parse(envValue);
-        } catch (error) {
-            // Se houver um erro ao analisar como JSON, retorna a string original
-            return envValue;
+            return JSON.parse(cachedValue);
+        } catch {
+            return cachedValue;
         }
     }
-
-    // Verifica se o valor é uma string representando um objeto JSON
-    if (envValue.startsWith('{') && envValue.endsWith('}')) {
-        try {
-            // Tenta analisar o valor como JSON
-            return JSON.parse(envValue);
-        } catch (error) {
-            // Se houver um erro ao analisar como JSON, retorna a string original
-            return envValue;
+    const value = await callback();
+    const valueToStore = typeof value === 'object' ? JSON.stringify(value) : value;
+    if (expiration) {
+        if (expiration instanceof Date) {
+            expiration = Math.ceil((expiration.getTime() - Date.now()) / 1000);
         }
+        await redisClient.setEx(key, expiration, valueToStore);
+    } else {
+        await redisClient.set(key, valueToStore);
     }
-
-    // Verifica se o valor é um número
-    if (!isNaN(envValue)) {
-        return parseInt(envValue); // Converte para inteiro
-    }
-
-    return envValue; // Retorna como string se não for um array, objeto JSON ou número
+    return value;
 }
 
 /**
- * Salva um log em um arquivo ou no sistema de log do Unix, dependendo da configuração.
- * @param {string} message - A mensagem de log a ser salva.
- * @param {string} logChannel - O canal de log onde a mensagem deve ser registrada.
+ * Recupera um valor associado a uma chave do Redis. Se o valor for um JSON, realiza o parse.
+ * Retorna `null` caso a chave não exista.
+ * 
+ * @param {string} key Chave usada para buscar o valor no Redis.
+ * @returns {Promise<any|null>} Promessa que resolve com o valor recuperado e parseado do Redis, ou `null` se a chave não existir.
  */
-function saveLog(message, logChannel = 'logs') {
-    const logType = env('logs') || 'file'; // Verifica o tipo de log definido em process.env.logs
-
-    const red = '\x1b[31m'; // Vermelho
-    const green = '\x1b[32m'; // Verde
-    const yellow = '\x1b[33m'; // Amarelo
-    const reset = '\x1b[0m'; // Reset de cor
-
-    if (logType === 'file') {
-        const logsFolderPath = path.join(resolve_path('src'), 'logs');
-        if (!fs.existsSync(logsFolderPath)) {
-            fs.mkdirSync(logsFolderPath);
-        }
-
-        const logFilePath = path.join(logsFolderPath, `${logChannel}.log`); // Use o canal de log no nome do arquivo
-
-        const maxSizeInBytes = 35 * 1024 * 1024; // 35 MB
-        const stats = fs.statSync(logFilePath);
-
-        if (stats.size >= maxSizeInBytes) {
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const backupLogFilePath = `${logFilePath}.${timestamp}`;
-
-            fs.renameSync(logFilePath, backupLogFilePath);
-            fs.writeFileSync(logFilePath, '');
-        }
-
-        const logMessage = `[${new Date().toISOString()}] - LOG: ${typeof message == 'string' ? message : JSON.stringify(message, null, 4)}\n`;
-
-        fs.appendFile(logFilePath, logMessage, (err) => {
-            if (err) {
-                console.error('Erro ao salvar o log:', err);
-            }
-        });
-    } else if (logType === 'unix') {
-        if (logChannel === 'errors') {
-            console.error(`${yellow}[${new Date().toISOString()}] - [${logChannel}] - ERROR: ${red}${typeof message == 'string' ? message : JSON.stringify(message, null, 4)}\n${reset}`);
-        } else {
-            console.log(`${green}[${new Date().toISOString()}] - [${logChannel}] - LOG: ${yellow}${typeof message == 'string' ? message : JSON.stringify(message, null, 4)}\n${reset}`);
-        }
-    } else {
-        console.error('Tipo de log não suportado:', logType);
+async function redisRecovery(key) {
+    const cachedValue = await redisClient.get(key);
+    if (!cachedValue) {
+        return null;
     }
+    try {
+        return JSON.parse(cachedValue);
+    } catch {
+        return cachedValue;
+    }
+}
+
+/**
+ * Gerencia uma lista de PIDs em um conjunto Redis associado a uma chave personalizada.
+ * 
+ * @param {string} customKey Chave personalizada para identificar o conjunto de PIDs no Redis.
+ * @returns {{
+ *   add: (pid: string) => Promise<number>, 
+ *   rem: (pid: string) => Promise<number>, 
+ *   all: () => Promise<string[]>, 
+ *   count: () => Promise<number>, 
+ *   reset: () => Promise<void>
+ * }} Objeto contendo métodos para manipular a lista de PIDs: adicionar, remover, listar todos, contar e resetar.
+ */
+function redisProcesses(customKey) {
+    return {
+        add: async (pid) => await redisClient.sAdd(customKey, pid.toString()),
+        rem: async (pid) => await redisClient.sRem(customKey, pid.toString()),
+        all: async () => await redisClient.sMembers(customKey),
+        count: async () => await redisClient.sCard(customKey),
+        reset: async () => await redisClient.del(customKey)
+    };
+}
+
+/**
+ * Função para obter e converter valores de variáveis de ambiente.
+ *
+ * @param {string} key - A chave da variável de ambiente.
+ * @returns {string|number|object|array|null|undefined} - O valor convertido da variável de ambiente,
+ * ou null se o valor numérico for NaN, ou undefined se a variável não estiver definida.
+ */
+function env(key) {
+    const envValue = process.env[key];
+    if (envValue === undefined) return undefined;
+
+    try {
+        // Tenta parsear como JSON se inicia com '[' ou '{'
+        if (/^\[|{/.test(envValue)) return JSON.parse(envValue);
+    } catch (error) {
+        // Retorna o valor como string se o JSON.parse falhar
+    }
+
+    // Tenta converter para número, retorna null se for NaN
+    const numberValue = Number(envValue);
+    return isNaN(numberValue) ? envValue : numberValue;
+}
+
+class Logger {
+    static save(...args) {
+        const reset = '\x1b[0m', red = '\x1b[31m', green = '\x1b[32m', yellow = '\x1b[33m', blue = '\x1b[34m';
+        const colors = { error: red, info: green, warn: yellow, debug: blue, default: reset };
+        const logType = env('LOG_TYPE') || 'file';
+        const basePath = path.join(resolve_path('src'), 'logs');
+
+        let level = 'default';
+        if (typeof args[args.length - 1] === 'object' && args[args.length - 1].level) {
+            level = args.pop().level;
+        }
+
+        // Combina todas as mensagens em uma única string
+        const combinedMessage = args.flat().map(msg => typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg).join(' | ');
+
+        const channel = level;
+        const filePath = path.join(basePath, `${channel}.log`);
+        const headerLog = `[${new Date().toISOString()}] ${channel.toUpperCase()}: `;
+        const color = colors[level] || reset;
+
+        if (logType === 'file') {
+            if (!fs.existsSync(basePath)) fs.mkdirSync(basePath);
+            if (fs.existsSync(filePath) && fs.statSync(filePath).size >= 35 * 1024 * 1024) {
+                fs.renameSync(filePath, `${filePath}.${new Date().toISOString().replace(/[:.]/g, '-')}`);
+            }
+            fs.appendFileSync(filePath, `${headerLog}${combinedMessage}\n`);
+        } else if (logType === 'unix') {
+            console.log(`${headerLog}${color}${combinedMessage}${reset}`);
+        } else {
+            console.error(`${red}Tipo de log não suportado: ${logType}${reset}`);
+        }
+    }
+
+    static getCallerDetails() {
+        const stack = new Error().stack;
+        const stackLines = stack.split('\n');
+        const callerLine = stackLines[3];
+        if (!callerLine) return 'Caller details not available';
+        const match = callerLine.match(/at (.*?) \((.*?):(\d+):(\d+)\)$/);
+        return match ? `${match[1]} ${match[2]} Line ${match[3]}` : callerLine;
+    }
+
+    static error(...args) { this.save(...args, { level: 'error' }); }
+    static info(...args) { this.save(...args, { level: 'info' }); }
+    static warn(...args) { this.save(...args, { level: 'warn' }); }
+    static debug(...args) { this.save(...args, { level: 'debug' }); }
 }
 
 /**
@@ -431,13 +365,30 @@ function lang(key, lang = 'en', replacements = {}) {
         const langsFileContent = fs.readFileSync(langsFilePath, 'utf8');
         translations = JSON.parse(langsFileContent);
     } catch (error) {
-        console.error('Erro ao ler o arquivo de traduções:', error);
+        Logger.save({ message: 'Erro ao ler o arquivo de traduções', error }, 'error');
+        const langsFileContent = fs.readFileSync(resolve_path(`langs/en.json`), 'utf8');
+        translations = JSON.parse(langsFileContent);
     }
 
-    let translation = translations[key] || key;
+    // Acessa subtraduções baseadas no caminho especificado em "key"
+    const keys = key.split('.');
+    let translation = keys.reduce((acc, k) => acc && acc[k] ? acc[k] : null, translations);
+
+    // Se a chave apontar para um array, permita a sintaxe "chave:índice" para acessar um elemento específico
+    if (translation === null && key.includes(':')) {
+        const [arrayKey, index] = key.split(':');
+        const arrayTranslation = keys.slice(0, -1).reduce((acc, k) => acc && acc[k] ? acc[k] : null, translations);
+
+        translation = arrayTranslation ? arrayTranslation[arrayKey][parseInt(index)] : null;
+    }
+
+    // Se a tradução for um objeto ou array, retorna a string JSON do objeto/array
+    if (typeof translation === 'object') {
+        translation = JSON.stringify(translation);
+    }
 
     // Substitui os placeholders na tradução, se houver substituições
-    if (Object.keys(replacements).length > 0) {
+    if (translation && Object.keys(replacements).length > 0) {
         for (const placeholder in replacements) {
             const replacementValue = replacements[placeholder];
             const placeholderRegex = new RegExp(`:${placeholder}`, 'g');
@@ -445,7 +396,34 @@ function lang(key, lang = 'en', replacements = {}) {
         }
     }
 
-    return translation;
+    return translation || key; // Retorna a tradução ou a chave original se não houver tradução
+}
+
+function friendlyDate(d, langCode = 'en') {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    const inputDate = new Date(d.slice(0, 4), d.slice(4, 6) - 1, d.slice(6));
+    const diff = (now - inputDate) / (1000 * 60 * 60 * 24);
+
+    if (diff < 1 && now.getDate() === inputDate.getDate()) {
+        return lang("calendar_to_human.today", langCode);
+    } else if (diff >= 1 && diff < 2) {
+        return lang("calendar_to_human.yesterday", langCode);
+    } else if (diff >= 2 && diff < 3) {
+        return lang("calendar_to_human.the_day_before_yesterday", langCode);
+    } else if (diff >= 3 && diff < 7) {
+        return lang("calendar_to_human.day", langCode, { days: Math.floor(diff) });
+    } else if (diff >= 7 && diff < 30) {
+        const week = Math.floor(diff / 7);
+        return lang("calendar_to_human.week", langCode, { week });
+    } else if (diff >= 30 && diff < 365) {
+        const month = Math.floor(diff / 30);
+        return lang("calendar_to_human.month", langCode, { month });
+    } else {
+        const year = Math.floor(diff / 365);
+        return lang("calendar_to_human.year", langCode, { year });
+    }
 }
 
 function resolve_path(searchPath) {
@@ -496,64 +474,181 @@ function resolve_path(searchPath) {
 }
 
 /**
- * Finaliza um processo por PID ou uma lista de PIDs.
- * @param {number | Array<number>} pids - O PID ou uma lista de PIDs a serem encerrados.
- * @param {function} callback - Função de retorno de chamada a ser chamada após o encerramento do processo.
+ * Chama uma função de comando.
+ * 
+ * @param {string} command - O nome do comando a ser executado.
+ * @param {import('telegraf').Context} ctx - O contexto da mensagem.
+ * @param {string} functionName - O nome da função a ser executada.
+ * @param  {...any} args - Os argumentos a serem passados à função.
+ * @returns 
  */
-function killProcess(pids, callback) {
-    if (!Array.isArray(pids)) {
-        pids = [pids]; // Se for um único PID, transforme em uma lista.
+async function callCommand(command, ctx, functionName, ...args) {
+    try {
+        const commandModule = require(`../telegram/commands/${command}`);
+        if (functionName && typeof commandModule[functionName] === 'function') {
+            return await commandModule[functionName](ctx, ...args);
+        } else if (typeof commandModule === 'function') {
+            return await commandModule(ctx, ...args);
+        } else {
+            throw new Error('Função não encontrada.');
+        }
+    } catch (error) {
+        Logger.error(`Erro ao executar o comando`, error), console.error(error);
+
+        if (ctx.updateType === 'message') {
+            // Envia uma mensagem genérica de erro ao usuário
+            await ctx.reply('😣 An error occurred while executing the command. Please try again later.');
+        }
+    }
+}
+
+/**
+ * Gera links de convite para um grupo e/ou canal se configurados nas variáveis de ambiente.
+ * 
+ * @param {import('telegraf').Context} ctx - Contexto do Telegraf para acesso às funções do Telegram.
+ * @returns {Promise<string>} Uma string contendo os links de convite formatados com Markdown.
+ */
+async function getInviteLinks(ctx) {
+    const links = await Promise.all([
+        env('JOIN_GROUP') ? redisRemember(`INVITE_LINK_EXPORT:${env('JOIN_GROUP')}`, async () => ctx.telegram.exportChatInviteLink(env('JOIN_GROUP')).then(link => `[👥 Group](${link})`)) : null,
+        env('JOIN_CHANNEL') ? redisRemember(`INVITE_LINK_EXPORT:${env('JOIN_CHANNEL')}`, async () => ctx.telegram.exportChatInviteLink(env('JOIN_CHANNEL')).then(link => `[📢 Channel](${link})`)) : null,
+    ]).then(results => results.filter(Boolean).join(' | '));
+
+    return links;
+}
+
+function shortText(text, size) {
+    if (text.length <= size) {
+        return text;
+    }
+    let shortened = text.substr(0, size + 1).trim();
+
+    let lastSpace = shortened.lastIndexOf(' ');
+    if (lastSpace > -1) {
+        shortened = shortened.substr(0, lastSpace);
     }
 
-    // Determina o comando a ser usado com base na plataforma.
-    const platform = process.platform;
-    let command, args;
+    return shortened + '...';
+}
 
-    if (platform === 'win32') {
-        command = 'taskkill';
-        args = ['/F', '/T', '/PID']; // Força o encerramento e termina os subprocessos.
-    } else if (platform === 'linux' || platform === 'darwin') {
-        command = 'kill';
-        args = ['-9']; // Sinal SIGKILL para forçar o encerramento.
-    } else {
-        throw new Error(`Plataforma não suportada: ${platform}`);
+const shortNumerals = n => n < 1e3 ? `${n}` : n < 1e6 ? `${(n / 1e3).toFixed(1).replace(/\.0$/, '')}k` : n < 1e9 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M` : `${(n / 1e9).toFixed(1).replace(/\.0$/, '')}B`;
+
+const formatFilename = (filename) => {
+    const accentsMap = {
+        á: 'a', é: 'e', í: 'i', ó: 'o', ú: 'u',
+        à: 'a', è: 'e', ì: 'i', ò: 'o', ù: 'u',
+        ã: 'a', õ: 'o', â: 'a', ê: 'e', î: 'i', ô: 'o', û: 'u',
+        ç: 'c', ü: 'u', Á: 'A', É: 'E', Í: 'I', Ó: 'O', Ú: 'U',
+        À: 'A', È: 'E', Ì: 'I', Ò: 'O', Ù: 'U',
+        Ã: 'A', Õ: 'O', Â: 'A', Ê: 'E', Î: 'I', Ô: 'O', Û: 'U',
+        Ç: 'C', Ü: 'U'
+    };
+
+    let extension = '';
+    let baseName = filename;
+    const dotIndex = filename.lastIndexOf('.');
+
+    // Se houver uma extensão, separa-a do resto do nome
+    if (dotIndex > -1) {
+        extension = filename.substring(dotIndex);
+        baseName = filename.substring(0, dotIndex);
     }
 
-    // Inicia o processo para cada PID.
-    pids.forEach((pid) => {
-        const process = spawn(command, [...args, pid.toString()]);
+    let cleanBaseName = baseName
+        .split('')
+        .map(char => accentsMap[char] || char)
+        .join('')
+        .replace(/[^a-zA-Z0-9\s]/g, '') // Remove caracteres especiais, mantendo espaços
+        .trim()                         // Remove espaços extras no início e no fim
+        .replace(/\s+/g, '_');          // Substitui espaços por underscores
 
-        process.on('close', (code) => {
-            if (code === 0) {
-                console.log(`Processo com PID ${pid} encerrado com sucesso.`);
-                if (callback) {
-                    callback(null, pid);
-                }
-            } else {
-                console.error(`Erro ao encerrar o processo com PID ${pid}.`);
-                if (callback) {
-                    callback(new Error(`Erro ao encerrar o processo com PID ${pid}.`), pid);
-                }
-            }
-        });
-    });
+    // Se o nome base limpo ficar vazio, usa 'Unknow_name'
+    if (!cleanBaseName) {
+        cleanBaseName = 'Unknow_name';
+    }
+
+    // Junta o nome base limpo com a extensão
+    return cleanBaseName + extension;
+};
+
+/**
+ * Envia uma requisição HTTP/HTTPS com suporte a GET e POST.
+ *
+ * @param {string} endpoint - O endpoint da requisição.
+ * @param {'POST'|'GET'} method - O método da requisição.
+ * @param {Object} [data={}] - Dados a serem enviados na requisição.
+ * @param {Object} [headers={}] - Cabeçalhos da requisição.
+ * @returns {{
+ *     httpCode: number,
+ *     headers: Object,
+ *     body: Object|string
+ * }} - Uma promessa que resolve com a resposta da requisição.
+ */
+async function curlRequest(endpoint, method, data = {}, headers = {}) {
+    let url = new URL(endpoint);
+
+    // Se o método for GET e existirem dados, converte-os em query strings
+    if (method === 'GET' && Object.keys(data).length > 0) {
+        url.search = new URLSearchParams(data).toString();
+    }
+
+    const init = { method, headers };
+
+    // Se existir 'input_file', prepara o corpo da requisição como um stream
+    if (data.input_file) {
+        const stats = fs.statSync(data.input_file);
+        headers['Content-Length'] = stats.size;
+        headers['Content-Type'] = 'application/octet-stream';
+        init.body = fs.createReadStream(data.input_file);
+    } else if (method === 'POST' && Object.keys(data).length > 0 && !init.body) {
+        // Para requisições POST sem 'input_file', envia os dados como JSON
+        init.body = JSON.stringify(data);
+        headers['Content-Type'] = 'application/json';
+    }
+
+    try {
+        const response = await fetch(url, init);
+        const contentType = response.headers.get('content-type');
+        let body;
+
+        // Se a resposta for JSON, faz o parse automaticamente
+        if (contentType && contentType.includes('application/json')) {
+            body = await response.json();
+        } else {
+            body = await response.text();
+        }
+
+        return {
+            httpCode: response.status,
+            headers: response.headers.raw(),
+            body
+        };
+    } catch (error) {
+        Logger.save({ message: 'Request failed', error }, 'error');
+        throw error;
+    }
 }
 
 module.exports = {
+    getInviteLinks,
+    curlRequest,
+    shortNumerals,
+    shortText,
+    callCommand,
+    friendlyDate,
     resolve_path,
     env,
-    saveLog,
+    Logger,
+    formatFilename,
     lang,
-    usuario,
-    banOrUnban,
     editOrSendMessage,
+    editReplyMarkupOrSend,
     sendPhotoOrMessage,
     sendAudioOrVideo,
     isUserInGroupOrChannel,
     updateTypeOrigin,
-    isBanned,
-    incDownload,
-    saveAudioDb,
     sleep,
-    killProcess
+    redisRemember,
+    redisRecovery,
+    redisProcesses,
 }
