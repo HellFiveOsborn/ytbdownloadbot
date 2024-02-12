@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  nodeapp:
+    container_name: ytdownloadbot_node
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/usr/src/app
+    depends_on:
+      - redis
+    networks:
+      - ytdownloadbot-network
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  redis:
+    container_name: ytdownloadbot_redis
+    image: redis:alpine
+    networks:
+      - ytdownloadbot-network
+
+networks:
+  ytdownloadbot-network:
+    driver: bridge
