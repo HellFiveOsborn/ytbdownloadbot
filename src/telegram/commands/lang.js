@@ -1,8 +1,10 @@
-const { usuario, lang } = require('../../module/functions');
+const redisClient = require('../../module/redisClient');
+const { User } = require('../../../models');
+const { lang, editReplyMarkupOrSend, redisRemember } = require('../../module/functions');
 
 const langs = {
     pt: {
-        id: 'pt',
+        id: 'pt-br',
         lang: '🇧🇷 PT-BR'
     },
     en: {
@@ -19,76 +21,57 @@ const langs = {
  * Setar o idioma
  * 
  * @param {import('telegraf').Context} ctx 
- * @param {import('better-sqlite3').Database} db 
- * @param {import('../../module/sessionmanager')} cache
- * @param {string} lang 
+ * @param {string} langKey 
  */
-const setLang = (ctx, db, cache, langKey) => {
+const setLang = async (ctx, langKey) => {
     const chat_id = ctx.from.id;
 
-    const updateDataSQL = `
-        UPDATE usuarios
-        SET lang = ?
-        WHERE chat_id = ?
-    `;
-
-    db.prepare(updateDataSQL).run(langKey, chat_id);
-
-    ctx.answerCbQuery(lang('selected_lang', langKey, { lang: langs[langKey].lang }));
-
-    langsCmd(ctx, db, cache);
+    await User.setLang(chat_id, langKey);
+    await ctx.answerCbQuery(lang('selected_lang', langKey, {
+        lang: Object.values(langs).filter(i => i.id == langKey)[0]?.lang
+    }));
+    await ctx.telegram.setMyCommands(lang('commands', langKey));
+    await getLangs(ctx);
 }
 
 /**
  * Comando Lang
  * 
  * @param {import('telegraf').Context} ctx 
- * @param {import('better-sqlite3').Database} db 
- * @param {import('../../module/sessionmanager')} cache
  */
-const langsCmd = (ctx, db, cache) => {
+const getLangs = async (ctx) => {
     const chat_id = ctx.from.id;
-
-    const user = usuario(ctx)
-
-    // Verifique se o usuário tem um idioma definido
-    const langCode = user.hasOwnProperty('lang') ? user.lang : 'en';
+    const langCode = await User.getLang(chat_id);
 
     // Crie um array para armazenar os botões em duas linhas
     const keyboard = [[], []];
 
-    // Loop pelas opções de idioma e crie um botão para cada uma
     Object.values(langs).map((lang, index) => {
-        const rowIndex = Math.floor(index / 2); // Divide em duas linhas
-
-        // Verifique se o idioma do usuário coincide com o idioma atual
+        const rowIndex = Math.floor(index / 2);
         const isSelected = langCode === lang.id ? '● ' : '';
 
-        keyboard[rowIndex].push({ text: isSelected + lang.lang, callback_data: `setlang ${lang.id}` });
+        keyboard[rowIndex].push({
+            text: isSelected + lang.lang,
+            callback_data: `setlang ${lang.id}`
+        });
     });
 
     // Crie o teclado inline com até 2 botões por linha
-    const inlineKeyboard = {
-        inline_keyboard: keyboard
+    const replyMarkupParams = {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
     };
 
-    try {
-        ctx.editMessageText(lang('select_lang', langCode), {
-            reply_markup: inlineKeyboard
-        }).then((resp) => cache.update(chat_id, 'ultima_msg', resp.message_id))
-            .catch(() => {
-                ctx.reply(lang('select_lang', langCode), {
-                    reply_markup: inlineKeyboard
-                }).then((resp) => cache.update(chat_id, 'ultima_msg', resp.message_id));
-            });
-    } catch (error) {
-        ctx.reply(lang('select_lang', langCode), {
-            reply_markup: inlineKeyboard
-        }).then((resp) => cache.update(chat_id, 'ultima_msg', resp.message_id));
-    }
+    const text = lang('select_lang', langCode);
+
+    ctx.updateType === 'callback_query' ?
+        await editReplyMarkupOrSend(ctx, null, text, replyMarkupParams, true, `LAST_MSG_SETLANG:${chat_id}`) :
+        await redisRemember(`LAST_MSG_SETLANG:${chat_id}`, async () => (await ctx.reply(text, replyMarkupParams)).message_id.toString(), 60);
 }
 
 module.exports = {
-    langsCmd,
+    getLangs,
     setLang
 }

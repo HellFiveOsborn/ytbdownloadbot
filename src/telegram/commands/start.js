@@ -1,16 +1,18 @@
-const { usuario, lang } = require('../../module/functions');
+const { User } = require('../../../models');
+const { lang, Logger } = require('../../module/functions');
 
 /**
  * Comandos start
  * 
  * @param {import('telegraf').Context} ctx 
- * @param {import('better-sqlite3').Database} db 
  */
-module.exports = (ctx, db) => {
-    const chat_id = ctx.from.id;
-    const user = usuario(ctx)
+module.exports = async (ctx) => {
+    const chat_id = ctx.from.id, langCode = await User.getLang(chat_id);
 
-    ctx.reply(lang("welcome", user.lang || '', { name: ctx.from.first_name }), {
-        parse_mode: 'Markdown'
+    await ctx.reply(lang("welcome", langCode, { name: ctx.from.first_name, username: ctx.botInfo.username }), {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            force_reply: true,
+        }
     });
 };
