@@ -10,25 +10,22 @@ Esse é um bot do Telegram para baixar músicas do YouTube Music.
 
 ## Começando
 
-### Pré-requisitos
-
-- Node.js (versão 16+) 
-- ffmpeg/ffprobe
-- yt-dlp
-
 ### Instalação
 
 ```bash
 git clone https://github.com/HellFiveOsborn/ytbdownloadbot
 cd ytbdownloadbot
 ```
-`yarn` ou `npm install`
+Para instalar as dependências
+```bash
+docker run --rm -v $(pwd):/usr/src/app -w /usr/src/app ytbdownloadbot-nodeapp npm install
+```
 
 Crie um arquivo `.env` com a chave de API do seu bot:
 `BOT_TOKEN=SEU_TOKEN_AQUI`
 
 **Executando**
-`yarn ou npm: start`
+`docker compose up -d`
 
 O bot irá iniciar. Converse com ele pelo Telegram para baixar músicas!
 
