@@ -1,0 +1,49 @@
+{
+    "welcome": "👋 Olá *:name*, seja bem-vindo! Envie o link do vídeo/música que deseja baixar ex:\n\n→ `https://music.youtube.com/watch?v=2nR1zrNzgcY`\n\nUtilize para encontrar videos/músicas\n• `@:username <pesquisa>` para *músicas*\n• `@vid <pesquisa>` para *videos*.",
+    "select_lang": "Selecione um idioma:",
+    "selected_lang": ":lang foi setado com sucesso!",
+    "invalid_link": "⚠️ Por favor, envie um link válido do YouTube/Music.\nEx:\n → `https://music.youtube.com/watch?v=2nR1zrNzgcY`",
+    "time_exceeded": "⚠️ O vídeo possui mais de :minute minutos de duração!",
+    "waiting_for_info": "🔍 Obtendo informações...",
+    "waiting_qualities": "🧮 Obtendo qualidades...",
+    "error_get_qualities": "❌ Ocorreu um erro, ao obter a lista de qualidades.",
+    "expire_link_cache": "⌛️ Video expirado, envie o link novamente!",
+    "select_quality": "Selecione a qualidade:",
+    "downloading": "📥 Baixando...",
+    "downloading_progress": "📥 Baixando... :progress% | 🐌 :speed\n\nAumente a velocidade dos seus downloads, seja VIP :join_link",
+    "downloading_progress_vip": "📥 Baixando... :progress% | ⚡ :speed",
+    "converting": "🔄 Convertendo... :progress%",
+    "big_file": "🪄 Arquivo muito grande, por favor aguarde!",
+    "share_this_bot": "⭐️ Compartilhar bot",
+    "link_file_download": "🎃✨ Seu download está pronto!\n\nAchou que iriamos te deixar na mão?",
+    "error_upload": "❌ Ocorreu um erro, ao fazer upload da media!",
+    "process_exceeded": "Você já possui :count processos de download na fila.\nAguarde-os terminarem.",
+    "in_process": "⏳ Já em processo, por favor aguarde a finalização!",
+    "share_link": "https://t.me/share/url?url=https://t.me/:username&text=📥 Baixe vídeos/músicas com o Youtube Music Bot",
+    "finish_process": "Todos os processos foram finalizados! ✔️",
+    "you_banned": "❗️Você foi banido!",
+    "you_unbanned": "🫤 Você foi desbanido por um administrador!",
+    "help": "🎵 *Youtube Music Bot - Download de Músicas e Vídeos* 📽️\n\nCom o Youtube Music Bot, você pode fazer o seguinte:\n\n— *Baixar Músicas em Ótima Qualidade:* Baixe suas faixas favoritas do YouTube Music em alta qualidade de áudio.\n\n— *Baixar Vídeos em MP4:* Faça o download de vídeos do YouTube em formatos de vídeo MP4.\n\n— *Baixar Vídeos e Convertê-los para MP3:* Transforme vídeos em arquivos de áudio no formato MP3.\n\nAlém disso:\n\n✨ *Torne-se VIP:* Junte-se ao :join_link para se tornar um VIP e acelerar seus downloads.\n\n⏰ *Limite de Duração:* No momento, é possível baixar vídeos com até 15 minutos de duração.\n\n🌐 *Troque o Idioma:* Mude o idioma do bot a qualquer momento com o comando /lang.\n\nAproveite o Youtube Music Bot para baixar e curtir suas músicas e vídeos favoritos! 🎶📺",
+    "inline_enter_search": "Procure o nome da música",
+    "inline_no_results": "Nenhum resultado encontrado",
+    "vip_only": "❌ Este comando só pode ser usado por VIPs!",
+    "calendar_to_human": {
+        "today": "hoje",
+        "yesterday": "ontem",
+        "the_day_before_yesterday": "anteontem",
+        "day": "Há :day dia(s)",
+        "week": "Há :week semana(s)",
+        "month": "Há :month mês(es)",
+        "year": "Há :year ano(s)"
+    },
+    "commands": [
+        {
+            "command": "lang",
+            "description": "Alterar o idioma"
+        },
+        {
+            "command": "help",
+            "description": "Informações de ajuda"
+        }
+    ]
+}
