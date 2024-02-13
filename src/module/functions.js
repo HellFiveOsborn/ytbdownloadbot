@@ -154,7 +154,7 @@ async function sendPhotoOrMessage(ctx, photoUrl, extraParams = {}) {
  * Envia um áudio ou vídeo com opções personalizadas e suporta botões inline.
  * @param {import('telegraf').Context} ctx - O contexto da mensagem.
  * @param {string} fileSource - A fonte do arquivo (URL ou caminho do arquivo local).
- * @param {import('telegraf/typings/telegram-types').ExtraVideo} extraParams - Opções personalizadas para a mensagem.
+ * @param {import('telegraf/typings/telegram-types').ExtraVideo | import('telegraf/typings/telegram-types').ExtraAudio} extraParams - Opções personalizadas para a mensagem.
  * @param {string} [extraParams.caption] - Legenda da mensagem.
  * @param {string} [extraParams.parse_mode] - Modo de formatação da mensagem.
  * @param {number} [extraParams.duration] - Duração do áudio/vídeo.
