@@ -137,7 +137,7 @@ class Model {
   */
   async getData() {
     const response = this.data || await this.getFullData();
-    const { title, thumbnail, description, channel, channel_url, channel_is_verified, language, categories, duration, duration_string, track, album, artist, release_date, release_year, view_count, tags, upload_date, channel_follower_count } = response;
+    const { title, thumbnail, description, channel, channel_url, channel_is_verified, language, categories, duration, duration_string, track, album, artist, release_date, release_year, view_count, tags, upload_date, channel_follower_count, live_status } = response;
 
     let data = {
       type: track ? 'music' : 'video',
@@ -156,6 +156,7 @@ class Model {
         view_count,
         tags,
         channel_follower_count,
+        live: (live_status === 'is_live' ? true : false),
         ...(
           track && {
             album,
