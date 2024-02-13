@@ -39,6 +39,11 @@ async function fetchVideoOptions(ctx, video_id) {
         return;
     }
 
+    if (videoData.data.live) {
+        await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: `15m (VIDEO LIVE)` }), {}, true, downloadingKey);
+        return;
+    }
+
     // Cria separador para as qualidades de vídeo e gera os botões em pares para duas colunas
     const videoButtons = videoData.qualities.videoFormats.length ? videoData.qualities.videoFormats.reduce((acc, format, index, array) => {
         if (index % 2 === 0) {
@@ -119,7 +124,7 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
     if (midia?.file_id && !audio_id) {
         const username = ctx.botInfo.username;
         const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username });
-        try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.save(error); }
+        try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.error(error); }
         await ctx.sendChatAction('upload_voice');
         const downloads = shortNumerals(await MidiaCache.countDownloads(video_id));
         const copyMsg = await ctx.telegram.copyMessage(ctx.from.id, midia.repo_id, midia.message_id, {
@@ -204,12 +209,13 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
                                 .then(async ({ message_id }) => await ctx.setMessageReaction(ctx.from.id, message_id, "😁"));
                         }
                     } catch (error) {
-                        Logger.save(error, 'error');
+                        Logger.error(error);
 
+                        ctx.chat.id = ctx.from.id;
                         await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
                     }
                 } else {
-                    try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.save(error) }
+                    try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.error(error) }
 
                     try {
                         const ext = file_name.slice(-4).toLowerCase();
@@ -225,7 +231,7 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
                             duration: videoData.data.duration,
                             performer: videoData.data.channel,
                             title: videoData.data.title,
-                            thumbnail: { source: `https://i.ytimg.com/vi/${video_id}/default.jpg` },
+                            thumbnail: { url: `https://i.ytimg.com/vi/${video_id}/default.jpg` },
                             parse_mode: 'Markdown',
                             width,
                             height
@@ -272,8 +278,9 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
                                 }
                             });
                     } catch (error) {
-                        Logger.save(error);
+                        Logger.error(error);
 
+                        ctx.chat.id = ctx.from.id;
                         await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
                     }
                 }
@@ -284,7 +291,7 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
                 redisClient.del(progresskey); // Remove o cache de controle progresso.
                 redisClient.del(`VIDEO_DATA:${video_id}`)
             }).onError(async (error) => {
-                Logger.save(error, 'error');
+                Logger.error(error);
                 await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
                 redisClient.del(progresskey); // Remove o cache de controle progresso.
             });
@@ -319,11 +326,16 @@ async function musicDownload(ctx, video_id) {
         return;
     }
 
+    if (videoData.data.live) {
+        await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: `15m (VIDEO LIVE)` }), {}, true, downloadingKey);
+        return;
+    }
+
     const midia = await MidiaCache.getMidia(video_id);
     if (midia?.file_id) {
         const username = ctx.botInfo.username;
         const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username });
-        try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.save(error); }
+        try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.error(error); }
         await ctx.sendChatAction('upload_voice');
         const downloads = shortNumerals(await MidiaCache.countDownloads(video_id));
         const copyMsg = await ctx.telegram.copyMessage(ctx.from.id, midia.repo_id, midia.message_id, {
