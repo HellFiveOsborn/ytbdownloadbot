@@ -1,4 +1,4 @@
-require('dotenv').config({ path: '../../.env', encoding: 'utf-8' });
+require('dotenv').config({ path: '../../.env', encoding: 'utf-8', override: true });
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -16,12 +16,16 @@ const specialRegex = {
 
 const supported_formats = {
   video: {
-    qualities: ['144p', '256p', '360p', '426p', '480p', '640p', '720p', '854p', '1080p', '1920p'],
+    qualities: [
+      '144p', '180p', '256p', '298p', '300p', '360p', '426p', '446p',
+      '450p', '480p', '540p', '594p', '600p', '640p', '720p', '854p',
+      '900p', '1080p', '1920p'
+    ],
     formats: ['mp4']
   },
   audio: {
     qualities: ['128k', '192k', '320k'],
-    formats: ['mp3']
+    formats: ['mp3', 'm4a']
   },
 };
 
@@ -59,6 +63,8 @@ class Model {
     this.queue = new Map(); // Lista de processos
 
     this.onCompleteCallback = this.onErrorCallback = null;
+
+    this.isVip = false;
   }
 
   /**
@@ -193,8 +199,8 @@ class Model {
       return `${(size / Math.pow(1024, i)).toFixed(2) * 1} ${['B', 'KB', 'MB', 'GB', 'TB'][i]}`;
     }
 
-    // Filtra e ordena os formatos de vídeo mp4 sem áudio
-    const videoFormats = formats
+    // Filtra e ordena os formatos de vídeo webm sem áudio
+    let videoFormats = formats
       .filter(f => f.ext === 'webm' && f.acodec === 'none' && supported_formats.video.qualities.includes(`${f.height}p`))
       .reduce((acc, current) => {
         const { height } = current;
@@ -211,11 +217,34 @@ class Model {
         best: index === 0 // Marca a melhor qualidade
       }));
 
+    // Se não encontrar vídeos webm, busca o melhor formato mp4 com áudio
+    if (!videoFormats.length) {
+      videoFormats = formats
+        .filter(f => f.ext === 'mp4' && f.acodec !== 'none' && supported_formats.video.qualities.includes(`${f.height}p`))
+        .reduce((acc, current) => {
+          const { height } = current;
+          if (height && !acc.some(item => item.height === height)) {
+            acc.push(current);
+          }
+          return acc;
+        }, [])
+        .sort((a, b) => b.height - a.height)
+        .map(({ format_id, height, filesize, filesize_approx }, index) => ({
+          formatId: format_id,
+          quality: `${height}p`,
+          fileSize: formatSize(filesize || filesize_approx),
+          best: index === 0
+        }));
+    }
+
+    if (!videoFormats.length) {
+      console.log(`\nNão foram encontradas Qualidades do video ${this.data.videoId}`);
+    }
+
     // Encontra e formata o áudio de melhor qualidade
-    const audioFormat = formats
-      .filter(f => f.ext === 'webm' && f.acodec !== 'none' && f.vcodec === 'none')
+    let audioFormat = formats
+      .filter(f => supported_formats.audio.formats.includes(f.ext) && f.acodec !== 'none' && f.vcodec === 'none')
       .map(f => {
-        // Converte o bitrate para um valor aproximado (128k, 192k, ou 320k)
         const approximateBitrate = supported_formats.audio.qualities.reduce((closest, quality) => {
           const qualityBitrate = parseInt(quality);
           return Math.abs(qualityBitrate - f.abr) < Math.abs(closest - f.abr) ? qualityBitrate : closest;
@@ -240,6 +269,7 @@ class Model {
    * Efetua o download e conversão no formato.
    * 
    * @param {string|NULL} video_id ID do video
+   * @param {Array} formats Formatos de qualidade
    * @param {string|NULL} id_qualidade ID da qualidade
    */
   downloadVideo(videoId = null, formats = [], isVip = false) {
@@ -250,17 +280,14 @@ class Model {
     let source = videoId ? `https://www.youtube.com/watch?v=${videoId}` : this.url;
     let folder_download = path.join(resolve_path(process.env.OUTPUT_DIR), randomString(12));
     let file_name = '%(title)s.%(ext)s';
+    this.isVip = isVip;
 
     let args = ['-v', '-q', '--progress', '-o', path.join(folder_download, file_name)];
-
-    if (!isVip) {
-      args.push('-r', bandwidth.noVip);
-    } else {
-      args.push('-r', bandwidth.max);
-    }
+    const bandwidthValue = !isVip ? bandwidth.noVip : bandwidth.max;
+    args.push('-r', bandwidthValue);
 
     args = (formats.filter(i => i != null).length > 1) ?
-      ['-f', formats.reverse().join('+'), ...args] :
+      ['-f', formats.join('+'), ...args] :
       ['-f', ...formats, ...args]
 
     args.push(source);
@@ -281,27 +308,20 @@ class Model {
             return;
           }
           let downloadedFile = files.find(file => path.extname(file) !== '');
+
           if (downloadedFile) {
             let fullPath = path.join(folder_download, downloadedFile);
-
-            // this.onCompleteCallback({
-            //   file_name: downloadedFile,
-            //   source: fullPath,
-            //   folder_download,
-            //   size: fs.statSync(fullPath).size,
-            //   createdAt: fs.statSync(fullPath).mtime,
-            // });
-
             const ffmpegClass = this.convert(fullPath);
 
             ffmpegClass.getMediaType((data) => {
+              ffmpegClass.isVip = this.isVip;
               ffmpegClass.start();
               ffmpegClass.progress((data) => this.yt_dlp.emit('converting', data));
               ffmpegClass.onComplete((data) => this.onCompleteCallback(data));
               ffmpegClass.onError((data) => this.onErrorCallback(data));
             });
           }
-        })
+        });
       } else {
         this.onErrorCallback({
           error: true,
@@ -319,7 +339,7 @@ class Model {
 
   convert(source) {
     this.ffmpeg = new ffmpeg(source);
-
+    
     return this.ffmpeg;
   }
 

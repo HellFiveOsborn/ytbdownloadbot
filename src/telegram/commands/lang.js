@@ -1,6 +1,5 @@
-const redisClient = require('../../module/redisClient');
 const { User } = require('../../../models');
-const { lang, editReplyMarkupOrSend, redisRemember } = require('../../module/functions');
+const { lang, editReplyMarkupOrSend } = require('../../module/functions');
 
 const langs = {
     pt: {
@@ -14,6 +13,18 @@ const langs = {
     es: {
         id: 'es',
         lang: '🇪🇸 ES'
+    },
+    ru: {
+        id: 'ru',
+        lang: '🇷🇺 RU'
+    },
+    'zh-hans': {
+        id: 'zh-hans',
+        lang: '🇨🇳 CN'
+    },
+    ar: {
+        id: 'ar',
+        lang: '🇸🇦 AR'
     }
 };
 
@@ -30,8 +41,12 @@ const setLang = async (ctx, langKey) => {
     await ctx.answerCbQuery(lang('selected_lang', langKey, {
         lang: Object.values(langs).filter(i => i.id == langKey)[0]?.lang
     }));
+
     await ctx.telegram.setMyCommands(lang('commands', langKey));
-    await getLangs(ctx);
+
+    await editReplyMarkupOrSend(ctx, ctx.msgId, lang('selected_lang', langKey, {
+        lang: Object.values(langs).filter(i => i.id == langKey)[0]?.lang
+    }), {}, false);
 }
 
 /**
@@ -45,10 +60,13 @@ const getLangs = async (ctx) => {
 
     // Crie um array para armazenar os botões em duas linhas
     const keyboard = [[], []];
-
     Object.values(langs).map((lang, index) => {
         const rowIndex = Math.floor(index / 2);
         const isSelected = langCode === lang.id ? '● ' : '';
+
+        if (!keyboard[rowIndex]) {
+            keyboard[rowIndex] = [];
+        }
 
         keyboard[rowIndex].push({
             text: isSelected + lang.lang,
@@ -65,10 +83,7 @@ const getLangs = async (ctx) => {
     };
 
     const text = lang('select_lang', langCode);
-
-    ctx.updateType === 'callback_query' ?
-        await editReplyMarkupOrSend(ctx, null, text, replyMarkupParams, true, `LAST_MSG_SETLANG:${chat_id}`) :
-        await redisRemember(`LAST_MSG_SETLANG:${chat_id}`, async () => (await ctx.reply(text, replyMarkupParams)).message_id.toString(), 60);
+    await ctx.reply(text, replyMarkupParams);
 }
 
 module.exports = {

@@ -27,6 +27,7 @@
     "inline_enter_search": "Procure o nome da música",
     "inline_no_results": "Nenhum resultado encontrado",
     "vip_only": "❌ Este comando só pode ser usado por VIPs!",
+    "maintenance": "🚧 Estamos em manutenção!",
     "calendar_to_human": {
         "today": "hoje",
         "yesterday": "ontem",
@@ -38,12 +39,12 @@
     },
     "commands": [
         {
-            "command": "lang",
-            "description": "Alterar o idioma"
-        },
-        {
             "command": "help",
             "description": "Informações de ajuda"
+        },
+        {
+            "command": "lang",
+            "description": "Alterar o idioma"
         }
     ]
 }

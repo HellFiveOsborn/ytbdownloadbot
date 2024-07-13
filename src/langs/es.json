@@ -27,6 +27,7 @@
     "inline_enter_search": "Busca el nombre de la canción",
     "inline_no_results": "No se encontraron resultados",
     "vip_only": "❌ Este comando es solo para VIPs.",
+    "maintenance": "🚧 Estamos en mantenimiento!",
     "calendar_to_human": {
         "today": "hoy",
         "yesterday": "ayer",

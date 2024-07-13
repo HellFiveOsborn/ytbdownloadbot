@@ -11,7 +11,8 @@ const { searchMusics } = require('../../module/ytmusicsearch');
 const specialRegex = {
     //youtube: /(?:https?:\/\/)?(?:www\.)?youtu(?:\.be\/|be.com\/\S*(?:|v|watch|e|embed|shorts)(?:(?:(?=\/[-a-zA-Z0-9_]{11,}(?!\S))\/)|(?:\S*v=|v\/)))(?<video_id>[-a-zA-Z0-9_]{11,})/,
     youtube: /^((?:https?:)?\/\/)?((?:www|m|music)\.)?((?:youtube\.com|youtu\.be))(\/(?:[\w\-]+\?v=|\w+\/|v\/)?)(?<video_id>[\w\-]+)(\S+)?$/,
-    callback_download: /\s(?<video_id>[^\s]+)\s(?<format_id>[^\s]+)\s?(?<audio_id>[^\s]+)?\s?(?<vipmode>[^\s]+)?/
+    callback_download: /\s(?<video_id>[^\s]+)\s(?<format_id>[^\s]+)\s?(?<audio_id>[^\s]+)?\s?(?<vipmode>[^\s]+)?/,
+    summarize: /\s(?<video_id>[^\s]+)/
 }
 
 const vip_qualities = ['2160p', '1440p', '1080p', '1920p', '320k'];
@@ -29,41 +30,45 @@ async function fetchVideoOptions(ctx, video_id) {
     const downloadingKey = `DOWNLOADING_LAST_MSG:${chat_id}:${video_id}`;
     const videoData = await redisRecovery(`VIDEO_DATA:${video_id}`);
 
+    // Link expirado
     if (!videoData) {
         await editOrSendMessage(ctx, null, lang('expire_link_cache', langCode), {}, true, downloadingKey);
         return;
     }
 
+    // Excede o maximo 15 minutos
     if (videoData.data.duration > 900) {
         await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: 15 }), {}, true, downloadingKey);
         return;
     }
 
+    // E uma live
     if (videoData.data.live) {
         await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: `15m (VIDEO LIVE)` }), {}, true, downloadingKey);
         return;
     }
 
     // Cria separador para as qualidades de vídeo e gera os botões em pares para duas colunas
-    const videoButtons = videoData.qualities.videoFormats.length ? videoData.qualities.videoFormats.reduce((acc, format, index, array) => {
-        if (index % 2 === 0) {
-            const nextFormat = array[index + 1];
-            const buttonPair = [{
-                text: `${vip_qualities.includes(format.quality) ? '⭐️' : ''} ${format.quality} · ${format.fileSize}`,
-                callback_data: `download ${video_id} ${format.formatId} ${videoData.qualities.audioFormat.formatId} ${vip_qualities.includes(format.quality) ? 'vip' : ''}`
-            }];
+    const videoButtons = videoData.qualities.videoFormats.length ?
+        videoData.qualities.videoFormats.reduce((acc, format, index, array) => {
+            if (index % 2 === 0) {
+                const nextFormat = array[index + 1];
+                const buttonPair = [{
+                    text: `${vip_qualities.includes(format.quality) ? '⭐️' : ''} ${format.quality} · ${format.fileSize}`,
+                    callback_data: `download ${video_id} ${format.formatId} ${videoData.qualities.audioFormat.formatId} ${vip_qualities.includes(format.quality) ? 'vip' : ''}`
+                }];
 
-            if (nextFormat) {
-                buttonPair.push({
-                    text: `${vip_qualities.includes(nextFormat.quality) ? '⭐️' : ''} ${nextFormat.quality} · ${nextFormat.fileSize}`,
-                    callback_data: `download ${video_id} ${nextFormat.formatId} ${videoData.qualities.audioFormat.formatId} ${vip_qualities.includes(nextFormat.quality) ? 'vip' : ''}`
-                });
+                if (nextFormat) {
+                    buttonPair.push({
+                        text: `${vip_qualities.includes(nextFormat.quality) ? '⭐️' : ''} ${nextFormat.quality} · ${nextFormat.fileSize}`,
+                        callback_data: `download ${video_id} ${nextFormat.formatId} ${videoData.qualities.audioFormat.formatId} ${vip_qualities.includes(nextFormat.quality) ? 'vip' : ''}`
+                    });
+                }
+
+                acc.push(buttonPair);
             }
-
-            acc.push(buttonPair);
-        }
-        return acc;
-    }, [[{ text: `👇 Qualities in "Video" 👇`, callback_data: 'download_format' }]]) : [];
+            return acc;
+        }, [[{ text: `👇 Qualities in "Video" 👇`, callback_data: 'download_format' }]]) : [];
 
     // Cria separador e botão para a qualidade de áudio
     const audioButton = videoData.qualities.audioFormat ? [
@@ -75,19 +80,24 @@ async function fetchVideoOptions(ctx, video_id) {
     ] : [];
 
     // Combina botões de vídeo e áudio
-    const buttons = [...videoButtons, ...audioButton];
+    let buttons = [...videoButtons, ...audioButton];
 
     if (!buttons.length) {
         await editOrSendMessage(ctx, null, lang('error_get_qualities', langCode), {}, true, downloadingKey);
         return;
     }
 
+    buttons = [...buttons, [{
+        text: `✨ Summarize Video`,
+        callback_data: `summarize ${video_id}`
+    }]];
+
     await editOrSendMessage(ctx, null, `*${videoData.data.title}*\n`
         + `\n• 📺 [${videoData.data.channel}](${videoData.data.channel_url}) ${videoData.data.channel_is_verified ? '⭐' : ''} _(${shortNumerals(videoData.data.channel_follower_count)} subs)_`
         + `\n• 🗓 ${friendlyDate(videoData.data.upload_date, langCode)}`
         + `\n• ⏰ ${videoData.data.duration < 60 ? '0:' + videoData.data.duration : videoData.data.duration_string} | `
         + `👁 ${shortNumerals(videoData.data.view_count)} views`
-        + `\n• 📜 _${shortText(videoData.data.description.replace(/\r?\n|\r/g, " "), 60)}_`
+        + `\n• 📜 _${shortText(videoData.data.description.replace(/\r?\n|\r/g, " ") || 'No description...', 60)}_`
         + `${videoData.data.tags.length ? '\n• 🔖 `' + shortText(videoData.data.tags.map(tag => `#${tag}`).join(', '), 60) + '`' : ''}`
         + `[ㅤ](${videoData.data.thumbnail})\n`
         + `\n_${lang('select_quality', langCode)}_`, {
@@ -137,6 +147,7 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
         return;
     }
 
+    // Excede o maximo 15 minutos
     if (videoData.data.duration > 900) {
         await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: 15 }), {}, true, downloadingKey);
         return;
@@ -152,18 +163,14 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
     }
 
     const fetchVideo = new YoutubeVideo(video_id);
-
     await editOrSendMessage(ctx, null, lang('downloading', langCode), {}, true, downloadingKey);
-
     const join_link = await getInviteLinks(ctx);
 
     fetchVideo.downloadVideo(video_id, format_id, audio_id, vip)
         .then(async (processQueue) => {
             await redisProcesses(queueKey).add(processQueue.processId); // Add +1 processo para o usuario.
 
-            redisRemember(progresskey, async () => ({
-                message_id: await redisRecovery(downloadingKey), time: Date.now()
-            }));
+            redisRemember(progresskey, async () => ({ message_id: await redisRecovery(downloadingKey), time: Date.now() }));
 
             processQueue.progress(async ({ porcentagem, baixado, velocidade, converting }) => {
                 lastProgress = await redisRecovery(progresskey), now = Date.now();
@@ -173,13 +180,11 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
                     const text = lang(statusLang, langCode, { progress: porcentagem, speed: velocidade, join_link });
 
                     await editOrSendMessage(ctx, null, text, { disable_web_page_preview: true }, true, downloadingKey)
-                        .then(async ({ message_id }) => {
-                            await redisClient.set(progresskey, JSON.stringify({ message_id, time: now }))
-                        });
+                        .then(async ({ message_id }) => await redisClient.set(progresskey, JSON.stringify({ message_id, time: now })));
                 }
             }).onComplete(async ({ file_name, source, folder_download, size, createdAt, width, height }) => {
                 const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username: ctx.botInfo.username });
-                const api_url = 'https://filebin.net', bin_name = folder_download.split('/').pop();
+                const api_url = 'https://filebin.net', bin_name = folder_download?.split('/').pop() || 'download';
 
                 // Tamanho maior que 50mb
                 if (size >= 52428800) {
@@ -285,13 +290,14 @@ async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined })
                     }
                 }
 
-                fs.rm(folder_download, { recursive: true }, (err) => err && console.error(err.message));
+                folder_download && fs.rm(folder_download, { recursive: true }, (err) => err && console.error(err.message));
 
                 await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
                 redisClient.del(progresskey); // Remove o cache de controle progresso.
                 redisClient.del(`VIDEO_DATA:${video_id}`)
             }).onError(async (error) => {
                 Logger.error(error);
+                await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
                 await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
                 redisClient.del(progresskey); // Remove o cache de controle progresso.
             });
@@ -316,16 +322,19 @@ async function musicDownload(ctx, video_id) {
     const videoData = await redisRecovery(`VIDEO_DATA:${video_id}`);
     let lastProgress = await redisRecovery(progresskey);
 
+    // Link expirado
     if (!videoData) {
         await editOrSendMessage(ctx, null, lang('expire_link_cache', langCode), {}, true, downloadingKey);
         return;
     }
 
+    // Excede o maximo 15 minutos
     if (videoData.data.duration > 900) {
         await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: 15 }), {}, true, downloadingKey);
         return;
     }
 
+    // E uma live
     if (videoData.data.live) {
         await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: `15m (VIDEO LIVE)` }), {}, true, downloadingKey);
         return;
@@ -358,9 +367,7 @@ async function musicDownload(ctx, video_id) {
     }
 
     const fetchMusic = new YoutubeAudio(video_id);
-
     await editOrSendMessage(ctx, null, lang('downloading', langCode), {}, true, downloadingKey);
-
     const join_link = await getInviteLinks(ctx);
 
     fetchMusic.downloadMusic(video_id, vip)
@@ -433,13 +440,16 @@ async function musicDownload(ctx, video_id) {
                     await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
                 }
 
-                fs.rm(folder_download, { recursive: true }, (err) => err && console.error(err.message));
+                folder_download && fs.rm(folder_download, { recursive: true }, (err) => err && console.error(err.message));
 
                 await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
                 redisClient.del(progresskey); // Remove o cache de controle progresso.
                 redisClient.del(`VIDEO_DATA:${video_id}`)
+
+                Logger.info(`Download Musica, concluído: ${video_id}`);
             }).onError(async (error) => {
                 Logger.error(error);
+                await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
                 await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
                 redisClient.del(progresskey); // Remove o cache de controle progresso.
             });
@@ -501,9 +511,10 @@ async function inlineMusicSearch(ctx, inlineQuery) {
         title: item.title,
         description: `• Artist: ${item.artists.map(artist => artist.name).join(', ') || 'N/A'}`
             + `\n• Album: ${item.album || 'N/A'}`
-            + `\n• Duration: ${item.duration.label}`,
+            + `\n• Duration: ${item.duration.label || '0:00'}`,
         thumb_url: item.thumbnailUrl,
         hide_url: true,
+        url: `https://www.youtube.com/embed/${item.youtubeId}`,
         input_message_content: {
             message_text: `https://music.youtube.com/watch?v=${item.youtubeId}`,
         },

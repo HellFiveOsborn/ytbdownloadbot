@@ -27,6 +27,7 @@
     "inline_enter_search": "Search for the name of the song",
     "inline_no_results": "No results found",
     "vip_only": "❌ This command is only available to VIP users!",
+    "maintenance": "🚧 We are Currently undergoing Maintenance!",
     "calendar_to_human": {
         "today": "today",
         "yesterday": "yesterday",

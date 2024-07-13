@@ -15,6 +15,7 @@ class ffmpegClass {
         this.processes = new Map(); // Armazena os processos em segundo plano
         this.progressValue = 0;
         this.onCompleteCallback = this.onErrorCallback = null;
+        this.isVip = false;
     }
 
     frames(callback) {
@@ -80,16 +81,29 @@ class ffmpegClass {
     convert() {
         this.frames();
 
-        const args = ['-i', this.input, '-y'];
+        const args = ['-i', this.input];
         const audioBitrate = this.mediaData?.bit_rate ? `${Math.max(parseInt(this.mediaData.bit_rate, 10) / 1000, 128)}k` : '128k';
 
-        this.mediaData?.type === 'video' ?
-            args.push('-vf', `scale=${this.mediaData.streams.width}:${this.mediaData.streams.height}`, '-c:v', 'libx264', '-preset', 'fast', '-crf', '28', '-c:a', 'aac', '-b:a', audioBitrate) :
+        if (this.mediaData?.type === 'video') {
+            let videoFilter = `scale=${this.mediaData.streams.width}:${this.mediaData.streams.height}`;
+
+            if (!this.isVip) {
+                // Add watermark for VIP users
+                videoFilter += `,drawtext=text='@YoutubeMusicBetaBot':fontcolor=white:fontsize=12:box=1:boxcolor=black@0.5:boxborderw=5:x=w-tw-10:y=h-th-10`;
+            }
+
+            args.push(
+                '-vf', videoFilter,
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac', '-b:a', '96k'
+            );
+        } else {
             args.push('-c:a', 'libmp3lame', '-b:a', audioBitrate, '-q:a', '2');
+        }
 
         const outputExtension = this.mediaData?.type === 'audio' ? '.mp3' : '.mp4';
-        const output = `${path.dirname(this.input)}/${path.basename(this.input, path.extname(this.input))}${outputExtension}`;
-        args.push(output);
+        const output = `${path.dirname(this.input)}/_${path.basename(this.input, path.extname(this.input))}${outputExtension}`;
+        args.push('-y', output);
 
         this.ffmpeg = spawn('ffmpeg', args);
         this.processes.set(`FFMPEG:${this.ffmpeg.pid}`, this.ffmpeg);
@@ -108,10 +122,11 @@ class ffmpegClass {
                     folder_download: path.dirname(output),
                     size: fs.statSync(output).size,
                     createdAt: fs.statSync(output).mtime,
-                },
-                callbackObj = this.mediaData?.type === 'video' ? { ...callbackObj, width: this.mediaData.streams.width, height: this.mediaData.streams.height, } : callbackObj,
+                }, callbackObj = this.mediaData?.type === 'video' ? { ...callbackObj, width: this.mediaData.streams.width, height: this.mediaData.streams.height, } : callbackObj,
                 this.onCompleteCallback(callbackObj);
-            fs.unlinkSync(this.input); // Deleta o arquivo original após a conversão
+
+            // Deleta o arquivo original após a conversão
+            setTimeout(() => fs.unlinkSync(this.input), 7000);
         });
 
         return this;

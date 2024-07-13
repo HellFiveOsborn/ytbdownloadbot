@@ -62,13 +62,14 @@ module.exports = (sequelize, DataTypes) => {
      */
     static async getLang(id_telegram) {
       const user = await this.findOne({ where: { id_telegram } });
-      return user?.lang || 'en';
+      return user?.lang || null;
     }
 
-    static async setLang(id_telegram, lang = 'en') {
+    static async setLang(id_telegram, lang) {
       const user = await this.findOne({ where: { id_telegram } });
+      user && await user.update({ lang });
 
-      if (user) await user.update({ lang });
+      return lang;
     }
   }
   User.init({

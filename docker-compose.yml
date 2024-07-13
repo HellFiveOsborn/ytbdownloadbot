@@ -13,7 +13,7 @@ services:
     networks:
       - ytdownloadbot-network
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3900:3900"
 
   redis:
     container_name: ytdownloadbot_redis

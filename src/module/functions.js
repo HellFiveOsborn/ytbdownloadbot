@@ -258,24 +258,45 @@ async function redisRecovery(key) {
 }
 
 /**
- * Gerencia uma lista de PIDs em um conjunto Redis associado a uma chave personalizada.
+ * Gerencia uma lista de PIDs no Redis, cada um com uma expiração individual.
  * 
- * @param {string} customKey Chave personalizada para identificar o conjunto de PIDs no Redis.
+ * @param {string} customKeyPrefix Prefixo de chave personalizado para identificar PIDs no Redis.
  * @returns {{
- *   add: (pid: string) => Promise<number>, 
- *   rem: (pid: string) => Promise<number>, 
- *   all: () => Promise<string[]>, 
- *   count: () => Promise<number>, 
- *   reset: () => Promise<void>
- * }} Objeto contendo métodos para manipular a lista de PIDs: adicionar, remover, listar todos, contar e resetar.
- */
-function redisProcesses(customKey) {
+*   add: (pid: string) => Promise<void>, 
+*   rem: (pid: string) => Promise<void>, 
+*   all: () => Promise<string[]>, 
+*   count: () => Promise<number>, 
+*   reset: () => Promise<void>
+* }} Objeto contendo métodos para manipular PIDs: adicionar, remover, listar todos, contar e resetar.
+*/
+function redisProcesses(customKeyPrefix) {
+    const expirationTimeInSeconds = 300; // 5 minutos convertidos em segundos.
+
     return {
-        add: async (pid) => await redisClient.sAdd(customKey, pid.toString()),
-        rem: async (pid) => await redisClient.sRem(customKey, pid.toString()),
-        all: async () => await redisClient.sMembers(customKey),
-        count: async () => await redisClient.sCard(customKey),
-        reset: async () => await redisClient.del(customKey)
+        add: async (pid) => {
+            const key = `${customKeyPrefix}:${pid}`;
+            await redisClient.set(key, "", "EX", expirationTimeInSeconds);
+        },
+        rem: async (pid) => {
+            const key = `${customKeyPrefix}:${pid}`;
+            await redisClient.del(key);
+        },
+        all: async () => {
+            const keys = await redisClient.keys(`${customKeyPrefix}:*`);
+            return keys.map(key => key.replace(`${customKeyPrefix}:`, ""));
+        },
+        count: async () => {
+            // Similar a `all`, contar as chaves pode requerer a listagem delas primeiro, o que pode ser ineficiente.
+            const keys = await redisClient.keys(`${customKeyPrefix}:*`);
+            return keys.length;
+        },
+        reset: async () => {
+            // Remover todas as chaves com o prefixo especificado.
+            const keys = await redisClient.keys(`${customKeyPrefix}:*`);
+            for (const key of keys) {
+                await redisClient.del(key);
+            }
+        }
     };
 }
 
@@ -283,10 +304,14 @@ function redisProcesses(customKey) {
  * Função para obter e converter valores de variáveis de ambiente.
  *
  * @param {string} key - A chave da variável de ambiente.
+ * @param {string} [path] - O path para o arquivo .env. Opcional.
  * @returns {string|number|object|array|null|undefined} - O valor convertido da variável de ambiente,
  * ou null se o valor numérico for NaN, ou undefined se a variável não estiver definida.
  */
-function env(key) {
+function env(key, path = '') {
+    if (path) {
+        require('dotenv').config({ path });
+    }
     const envValue = process.env[key];
     if (envValue === undefined) return undefined;
 
@@ -365,7 +390,7 @@ function lang(key, lang = 'en', replacements = {}) {
         const langsFileContent = fs.readFileSync(langsFilePath, 'utf8');
         translations = JSON.parse(langsFileContent);
     } catch (error) {
-        Logger.save({ message: 'Erro ao ler o arquivo de traduções', error }, 'error');
+        Logger.save({ message: 'Erro ao ler o arquivo de traduções '.lang, error }, 'error');
         const langsFileContent = fs.readFileSync(resolve_path(`langs/en.json`), 'utf8');
         translations = JSON.parse(langsFileContent);
     }

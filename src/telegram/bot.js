@@ -23,6 +23,7 @@ class TelegramBot {
 		// Middleware para sair de grupos não permitidos
 		this.bot.use(async (ctx, next) => {
 			const chat_id = ctx.chat?.id;
+			const title = ctx.chat?.title;
 
 			// Sai de grupo/canais não autorizados!
 			if (
@@ -30,8 +31,8 @@ class TelegramBot {
 				env('CHATS_AllOWED').includes(chat_id) !== true
 			) {
 				await ctx.telegram.leaveChat(chat_id)
-					.then((result) => Logger.save(`Saindo do grupo/canal: ${ctx.chat.title}`))
-					.catch((data) => Logger.save(`Erro ao sair do grupo/canal: ${ctx.chat.title}`, 'error'))
+					.then((result) => Logger.debug(`Saindo do grupo/canal: ${title || chat_id}`))
+					.catch((data) => Logger.error(`Erro ao sair do grupo/canal: ${title || chat_id}`))
 				return;
 			}
 
@@ -45,8 +46,26 @@ class TelegramBot {
 			}
 		});
 
+		// Midleware para avisar que estamos em manutenção.
 		this.bot.use(async (ctx, next) => {
-			this.lang = await User.getLang(ctx.from.id);
+			this.lang = await User.getLang(ctx.from?.id) || 'en';
+			if (env('NODE_ENV') === 'development' && !env('ADMIN').includes(ctx.from?.id)) {
+				if (ctx.message) return ctx.reply(lang('maintenance', this.lang));
+				ctx.callbackQuery?.id && ctx.answerCbQuery(lang('maintenance', this.lang));
+				ctx.inlineQuery?.id && ctx.answerInlineQuery([], {
+					switch_pm_text: lang('maintenance', this.lang),
+					switch_pm_parameter: 'search'
+				});
+				return;
+			}
+			await next();
+		});
+
+		// Middleware para obter o idioma do usuário.
+		this.bot.use(async (ctx, next) => {
+			const chat_id = ctx?.from?.id;
+			await User.getUser({ id_telegram: chat_id, lang: ctx.from.language_code });
+			this.lang = await User.getLang(chat_id);
 			await next();
 		});
 
@@ -59,20 +78,18 @@ class TelegramBot {
 		// Middleware para barrar usuários banidos no banco de dados
 		this.bot.use(async (ctx, next) => {
 			const isBanned = await User.isBanned(ctx.from.id);
-
 			if (!env('ADMIN').includes(ctx.from.id) && isBanned) {
 				return;
 			}
-
 			await next();
 		});
 
 		// Middleware para controlar a frequência de mensagens dos usuários
 		this.bot.use(async (ctx, next) => {
-			if (updateTypeOrigin(ctx) === 'private') {
-				await User.getUser({ id_telegram: ctx.from.id, lang: ctx.from.language_code || 'en' });
-
+			if (updateTypeOrigin(ctx) === 'private' && ctx.message) {
 				const chat_id = ctx.from.id;
+
+				await User.getUser({ id_telegram: chat_id, lang: ctx.from.language_code });
 				const limitRPS = 3, banDuration = 3600, now = Math.floor(Date.now() / 1000);
 
 				// Tenta recuperar o cacheCount como uma string JSON
@@ -92,7 +109,7 @@ class TelegramBot {
 
 				if (isBanned && now > banEnd) {
 					await redisClient.del(`TEMPORARILY_BANNED:${chat_id}`);
-					await ctx.reply("Você foi desbanido e pode enviar mensagens novamente.");
+					await ctx.reply("You have been unbanned and can send messages again.");
 				} else if (!isBanned && messages > limitRPS) {
 					await redisClient.set(`TEMPORARILY_BANNED:${chat_id}`, now + banDuration, 'EX', banDuration);
 					await ctx.reply(lang('you_banned', this.lang), {
@@ -157,10 +174,7 @@ class TelegramBot {
 			const { video_id } = ctx.match.groups;
 
 			if (!video_id) {
-				ctx.reply(lang('invalid_link', this.lang), {
-					parse_mode: 'Markdown'
-				});
-
+				ctx.reply(lang('invalid_link', this.lang), { parse_mode: 'Markdown' });
 				return;
 			}
 
@@ -209,19 +223,41 @@ class TelegramBot {
 			await callCommand('download', ctx, 'mediaDownload', ctx.match.groups);
 		});
 
+		this.bot.action(specialRegex.summarize, async (ctx) => await callCommand('summarize', ctx, 'sendSummarize', ctx.match.groups));
+
 		// Fallback
 		this.bot.drop(async (ctx) => {
 			if (ctx.callbackQuery?.id) {
 				await ctx.answerCbQuery();
 			}
 
-			if (updateTypeOrigin(ctx) === 'message') {
+			if (ctx.message?.audio || ctx.message?.video) {
+				ctx.setMessageReaction(ctx.from.id, ctx.message.message_id, "🔥");
+				return;
+			}
+
+			if (updateTypeOrigin(ctx) === 'private' && ctx.message?.text) {
 				ctx.reply(lang('invalid_link', this.lang), { parse_mode: 'Markdown' });
 			}
 		});
 	}
 
 	run(webhook = false) {
+		this.bot.catch(async (error, ctx) => {
+			// Reporta o erro ao admin
+			ctx.telegram.sendMessage(
+				env('CACHE_CHANNEL'),
+				`<b>Error:</b>`
+				+ `<pre><code class="language-text">${error}</code></pre>`
+				+ `<b>User:</b> ${ctx.from?.first_name} (${ctx.from?.id})\n`
+				+ `Typed: ${ctx.message?.text || 'N/A'}`,
+				{ parse_mode: 'HTML' }
+			).catch(err => {
+				// Log caso a tentativa de envio de mensagem falhe
+				Logger.error('Failed to send error report to Telegram:', err.stack || err);
+			});
+		});
+
 		this.middlewares();
 		this.inline();
 		this.commands();
@@ -233,10 +269,9 @@ class TelegramBot {
 				});
 				return result;
 			})().then(async result => {
-				const status = await this.bot.startWebhook('/', null, process.env.BOT_WEBHOOK_PORT);
-				console.info(result ? '✅ Webhook is running!' : '❌ Error on setWebhook');
+				await this.bot.startWebhook('/', null, process.env.BOT_WEBHOOK_PORT);
+				console.info(result ? `\x1b[32m✓ Webhook is running!\x1b[0m` : `\x1b[31m× Error on setWebhook\x1b[0m`);
 			});
-
 			return;
 		}
 
