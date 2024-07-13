@@ -1,16 +1,28 @@
-const { usuario, lang } = require('../../module/functions');
+const { User } = require('../../../models');
+const { lang } = require('../../module/functions');
 
 /**
  * Comandos start
  * 
  * @param {import('telegraf').Context} ctx 
- * @param {import('better-sqlite3').Database} db 
  */
-module.exports = (ctx, db) => {
+module.exports = async (ctx) => {
     const chat_id = ctx.from.id;
-    const user = usuario(ctx)
+    const langCode = await User.getLang(chat_id);
 
-    ctx.reply(lang("welcome", user.lang || '', { name: ctx.from.first_name }), {
-        parse_mode: 'Markdown'
+    await ctx.reply(lang("welcome", langCode, {
+        name: ctx.from.first_name,
+        username: ctx.botInfo.username
+    }), {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            force_reply: true,
+            inline_keyboard: [
+                [
+                    { text: '🎵 Music', switch_inline_query_current_chat: ' ' },
+                    { text: '📺 Video', url: 'tg://resolve?domain=YoutubeMusicBetaBot&text=@vid ' }
+                ]
+            ]
+        }
     });
 };

@@ -1,26 +1,47 @@
-require('dotenv').config();
-
-const { saveLog, env } = require('./src/module/functions');
+require('dotenv').config({ override: true });
+const { Logger, env } = require('./src/module/functions');
 const TelegramBot = require('./src/telegram/bot');
 
-// Defina a função global para tratamento de exceções
-process.on('uncaughtException', (error) => {
-    const report = error.stack || error;
+// Função para reportar erros
+function reportError(error) {
+    const report = error.stack || error.toString();
+    Logger.debug('Error on app.js', report);
 
-    // Registre a exceção em seus logs usando saveLog
-    saveLog(report, 'errors');
+    try {
+        const bot = (new TelegramBot()).instance();
+        // Reporta o erro ao admin
+        bot.telegram.sendMessage(
+            env('CACHE_CHANNEL'),
+            `<b>Error:</b> <pre><code class="language-text">${escapeHTML(report)}</code></pre>`,
+            { parse_mode: 'HTML' }
+        ).catch(err => {
+            // Log caso a tentativa de envio de mensagem falhe
+            Logger.error('Failed to send error report to Telegram:', err.stack || err);
+        });
+    } catch (err) {
+        // Log caso ocorra um erro ao instanciar o bot ou enviar a mensagem
+        Logger.error('Error in error reporting mechanism:', err.stack || err);
+    }
+}
 
-    const bot = (new TelegramBot()).instance();
+// Escapa caracteres HTML para evitar a injeção de HTML
+function escapeHTML(str) {
+    return str.replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
 
-    // Reporta o erro ao admin
-    bot.telegram.sendMessage(env('canais_permitidos')[2], `<b>Error reportado:</b> <code>${report}</code>`, {
-        parse_mode: 'HTML'
-    })
+// Trata exceções não capturadas
+process.on('uncaughtException', reportError);
 
-    // Encerre o processo, pois ocorreu uma exceção não tratada
-    // process.exit(1);
-});
+// Trata promessas rejeitadas não capturadas
+process.on('unhandledRejection', reportError);
 
-// Run's
+// Execução
 const Telegram = new TelegramBot();
-Telegram.run(false);
+try {
+    Telegram.run(true);
+} catch (error) {
+    reportError(error);
+}

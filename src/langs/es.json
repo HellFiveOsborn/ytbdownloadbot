@@ -1,8 +1,8 @@
 {
-    "welcome": "👋 ¡Hola *:name*, bienvenido! Envía el enlace del video/música que deseas descargar:",
+    "welcome": "👋 ¡Hola *:name*, bienvenido! Envía el enlace del vídeo/música que quieres descargar, por ejemplo:\n\n→ `https://music.youtube.com/watch?v=2nR1zrNzgcY`\n\nUsa para encontrar vídeos/música\n• `@:username <búsqueda>` para *música*\n• `@vid <búsqueda>` para *vídeos*.",
     "select_lang": "Selecciona un idioma:",
     "selected_lang": "¡Se ha establecido :lang con éxito!",
-    "invalid_link": "⚠️ Por favor, envía un enlace válido de YouTube/Music.\nEjemplo: `https://music.youtube.com/watch?v=hqGOsVJ7hWg`",
+    "invalid_link": "⚠️ Por favor, envía un enlace válido de YouTube/Music.\nEx:\n → `https://music.youtube.com/watch?v=2nR1zrNzgcY`",
     "time_exceeded": "⚠️ ¡El video tiene más de :minute minutos de duración!",
     "waiting_for_info": "🔍 Obteniendo información...",
     "waiting_qualities": "🧮 Obteniendo calidades...",
@@ -10,17 +10,33 @@
     "expire_link_cache": "⌛️ El video ha expirado, ¡por favor envía el enlace nuevamente!",
     "select_quality": "Selecciona la calidad:",
     "downloading": "📥 Descargando...",
-    "downloading_progress": "📥 Descargando... :progress% | :megabytes\n\nAumenta la velocidad de tus descargas, conviértete en VIP al [unirte al canal](https://t.me/HellFiveOsbornCanal).",
-    "downloading_progress_vip": "📥 Descargando... :progress% | :megabytes",
+    "downloading_progress": "📥 Descargando... :progress% | 🐌 :speed\n\nAumenta la velocidad de tus descargas, conviértete en VIP al :join_link.",
+    "downloading_progress_vip": "📥 Descargando... :progress% | ⚡ :speed",
     "converting": "🔄 Convirtiendo... :progress%",
+    "big_file": "🪄 Archivo demasiado grande, ¡por favor espere!",
     "share_this_bot": "⭐️ Compartir este bot",
+    "link_file_download": "🎃✨ ¡Tu descarga está lista!\n\n¿Pensaste que te íbamos a dejar colgado?",
     "error_upload": "❌ Ha ocurrido un error al cargar el archivo multimedia!",
     "process_exceeded": "Ya tienes :count procesos de descarga en la cola.\nPor favor, espera a que terminen.",
     "in_process": "⏳ Ya en proceso, ¡por favor espera a que termine!",
     "share_link": "https://t.me/share/url?url=https://t.me/:username&text=📥 Descarga vídeos/música con el Youtube Music Bot",
     "finish_process": "¡Todos los procesos han sido completados! ✔️",
     "you_banned": "❗️¡Has sido bloqueado!",
-    "help": "🎵 *Youtube Music Bot - Descarga de Música y Vídeo* 📽️\n\nCon el Youtube Music Bot, puedes hacer lo siguiente:\n\n— *Descargar Música de Alta Calidad:* Descarga tus canciones favoritas de YouTube Music en audio de alta calidad.\n\n— *Descargar Vídeos en MP4/MKV:* Descarga vídeos de YouTube en formatos de vídeo MP4 o MKV.\n\n— *Descargar Vídeos y Convertirlos a MP3/M4A:* Convierte vídeos en archivos de audio en formato MP3 o M4A.\n\nAdemás:\n\n✨ *Conviértete en VIP:* Únete al canal @HellFiveOsbornCanal para convertirte en VIP y acelerar tus descargas.\n\n⏰ *Límite de Duración:* Actualmente, puedes descargar vídeos con una duración máxima de 12 minutos.\n\n✂️ *Limpieza de Procesos:* Usa el comando /kill para terminar todos los procesos en curso.\n\n🌐 *Cambiar Idioma:* Cambia el idioma del bot en cualquier momento con el comando /lang.\n\n¡Disfruta del Youtube Music Bot para descargar y disfrutar de tu música y vídeos favoritos! 🎶📺",
+    "you_unbanned": "🫤 ¡Has sido desbaneado por un administrador!",
+    "help": "🎵 *Youtube Music Bot - Descarga de Música y Videos* 📽️\n\nCon el Youtube Music Bot, puedes hacer lo siguiente:\n\n— *Descargar Música de Alta Calidad:* Descarga tus pistas favoritas de YouTube Music en alta calidad de audio.\n\n— *Descargar Videos en Formato MP4:* Descarga videos de YouTube en formatos de video MP4.\n\n— *Descargar Videos y Convertirlos a MP3:* Transforma videos en archivos de audio en formato MP3.\n\nAdemás:\n\n✨ *Conviértete en VIP:* Únete al :join_link para convertirte en VIP y acelerar tus descargas.\n\n⏰ *Límite de Duración:* Actualmente, es posible descargar videos de hasta 15 minutos de duración.\n\n🌐 *Cambiar Idioma:* Cambia el idioma del bot en cualquier momento con el comando /lang.\n\n¡Disfruta del Youtube Music Bot para descargar y disfrutar de tu música y videos favoritos! 🎶📺",
+    "inline_enter_search": "Busca el nombre de la canción",
+    "inline_no_results": "No se encontraron resultados",
+    "vip_only": "❌ Este comando es solo para VIPs.",
+    "maintenance": "🚧 Estamos en mantenimiento!",
+    "calendar_to_human": {
+        "today": "hoy",
+        "yesterday": "ayer",
+        "the_day_before_yesterday": "anteayer",
+        "day": "hace :day día(s)",
+        "week": "hace :week semana(s)",
+        "month": "hace :month mes(es)",
+        "year": "hace :year año(s)"
+    },
     "commands": [
         {
             "command": "lang",
@@ -29,10 +45,6 @@
         {
             "command": "help",
             "description": "Información de ayuda"
-        },
-        {
-            "command": "kill",
-            "description": "Terminar un proceso pendiente"
         }
     ]
 }

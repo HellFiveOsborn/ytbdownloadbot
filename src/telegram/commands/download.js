@@ -1,539 +1,549 @@
 const fs = require('fs');
-const { usuario, lang, editOrSendMessage, saveAudioDb, incDownload, saveLog, sendPhotoOrMessage, isUserInGroupOrChannel, sleep, sendAudioOrVideo, resolve_path } = require('../../module/functions');
-const SessionManager = require('../../module/sessionmanager');
-const { Video } = require('../../module/ytdownloader');
-const ffmpeg = require('../../module/ffmpeg');
 const path = require('path');
-const Database = require('better-sqlite3');
-const cache = new SessionManager();
-const db = new Database(resolve_path('database/bot.sqlite'));
+
+const { lang, redisRecovery, shortNumerals, friendlyDate, shortText, editOrSendMessage, redisProcesses, redisRemember, sendAudioOrVideo, curlRequest, formatFilename, Logger, sleep, isUserInGroupOrChannel, env, getInviteLinks } = require("../../module/functions");
+const { YoutubeVideo, YoutubeAudio } = require("../../module/ytdownloader");
+const redisClient = require("../../module/redisClient");
+
+const { User, MidiaCache } = require("../../../models");
+const { searchMusics } = require('../../module/ytmusicsearch');
+
+const specialRegex = {
+    //youtube: /(?:https?:\/\/)?(?:www\.)?youtu(?:\.be\/|be.com\/\S*(?:|v|watch|e|embed|shorts)(?:(?:(?=\/[-a-zA-Z0-9_]{11,}(?!\S))\/)|(?:\S*v=|v\/)))(?<video_id>[-a-zA-Z0-9_]{11,})/,
+    youtube: /^((?:https?:)?\/\/)?((?:www|m|music)\.)?((?:youtube\.com|youtu\.be))(\/(?:[\w\-]+\?v=|\w+\/|v\/)?)(?<video_id>[\w\-]+)(\S+)?$/,
+    callback_download: /\s(?<video_id>[^\s]+)\s(?<format_id>[^\s]+)\s?(?<audio_id>[^\s]+)?\s?(?<vipmode>[^\s]+)?/,
+    summarize: /\s(?<video_id>[^\s]+)/
+}
+
+const vip_qualities = ['2160p', '1440p', '1080p', '1920p', '320k'];
 
 /**
- * Obter as qualidades da media!
+ * Obtém os dados do vídeo do YouTube.
  * 
- * @param {import('telegraf').Context} ctx
- * @param {{
- *  video: import('../../module/ytdownloader').Video,
- *  videoID: string
- * }}
- * 
- * @returns {object}
+ * @param {import('telegraf').Context} ctx - Contexto do Telegraf com informações da query inline e do usuário.
+ * @param {string} video_id
  */
-const getFormatosButtons = async (ctx, { video, videoID }) => {
+async function fetchVideoOptions(ctx, video_id) {
     const chat_id = ctx.from.id;
+    const langCode = await User.getLang(chat_id);
 
-    const user = usuario(ctx);
-    const langCode = user.lang || '';
+    const downloadingKey = `DOWNLOADING_LAST_MSG:${chat_id}:${video_id}`;
+    const videoData = await redisRecovery(`VIDEO_DATA:${video_id}`);
 
-    let qualities;
-    let informacoes = {};
-
-    // Obtém a partir do cache!
-    if (cache.existsKey(chat_id, `download_cache_${videoID}`)) {
-        qualities = cache.get(chat_id, `download_cache_${videoID}`).qualidades;
-        informacoes = cache.get(chat_id, `download_cache_${videoID}`).informacoes;
-    } else {
-        qualities = await video.getQualities();
-        informacoes = await video.getInfo();
-    }
-
-    const { title, thumbnail, channel } = informacoes;
-
-    const buttons = [];
-
-    // Itera sobre os formatos disponíveis
-    for (const format in qualities) {
-        const formatOptions = qualities[format];
-
-        if (formatOptions.total > 1) {
-            // Cria um botão de separação com callback nulo
-            buttons.push([{ text: `🔸 FORMATO: ${format}`, callback_data: 'download_format' }]);
-
-            let qualy = []
-            let count = 0;
-
-            // Itera sobre as opções de qualidade do formato
-            for (const opcao in formatOptions.qualidades) {
-                const qualityInfo = formatOptions.qualidades[opcao];
-
-                // Cria um botão para a qualidade com o callback /download (videoID) (format) (convert) (quality id)
-                qualy.push({ text: `● ${qualityInfo.opcao}`, callback_data: `download ${videoID} ${format} ${qualityInfo.opcao} ${qualityInfo.id}` });
-
-                // Verifica se já adicionou 4 botões e cria um novo grupo
-                if (++count === 2) {
-                    buttons.push(qualy);
-                    qualy = []; // Limpa o array para o próximo grupo
-                    count = 0; // Reseta o contador
-                }
-            }
-
-            // Adicione qualquer botão restante
-            if (qualy.length > 0) {
-                buttons.push(qualy);
-            }
-        }
-    }
-
-    await ctx.deleteMessage(cache.get(chat_id, 'ultima_msg'));
-
-    const text = `🔖 ${title}\n👤 ${channel}\n\n_${lang('select_quality', langCode)}_`;
-
-    sendPhotoOrMessage(ctx, thumbnail, {
-        caption: text.toString('utf-8'),
-        reply_markup: {
-            inline_keyboard: buttons
-        },
-        parse_mode: 'Markdown'
-    })
-        .then((id) => cache.update(chat_id, 'ultima_msg', id))
-        .catch((error) => {
-            saveLog(error, 'errors');
-            ctx.reply(lang('error_get_qualities', langCode));
-        });
-
-    return qualities;
-}
-
-/**
- * Envia um áudio em cache ou executa um callback, se o áudio já estiver em cache.
- *
- * @param {Context} ctx O contexto da mensagem.
- * @param {string} id_video O ID do vídeo a ser verificado e encaminhado.
- * @param {Function} callback A função de callback a ser executada se o áudio não estiver em cache.
- */
-const forwardCacheMusica = async (ctx, id_video, callback) => {
-    const chat_id = ctx.from.id;
-    const user = usuario(ctx);
-    const langCode = user.hasOwnProperty('lang') ? user.lang : 'en';
-    const bot_username = (await ctx.telegram.getMe()).username;
-
-    // Verifica se o videoId já existe na tabela "musicas"
-    const existingAudio = db.prepare('SELECT file_id, chat_id FROM musicas WHERE ytb_id = ?').get(id_video);
-
-    // Cache Musica
-    if (existingAudio) {
-        const downloads = incDownload(existingAudio.file_id);
-
-        // Cria as informações para a resposta
-        const info = {
-            chat_id,
-            caption: `♻️ By Cache | 📥 ${downloads} Downloads\n\n**Made by ⚡️ @YoutubeMusicBetaBot**`,
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: lang('share_this_bot', langCode), url: lang('share_link', langCode, { username: bot_username }) }]
-                ]
-            },
-        };
-
-        // Se houver metadados no arquivo de áudio, inclua-os na resposta
-        if (existingAudio.metadata) {
-            Object.assign(info, JSON.parse(existingAudio.metadata), { thumbnail: existingAudio.thumbnail });
-        }
-
-        // Responde com o áudio do cache
-        ctx.persistentChatAction("upload_voice", () => ctx.replyWithAudio(existingAudio.file_id, info));
-    } else if (callback) {
-        // Executa o callback se fornecido e o áudio não estiver em cache
-        callback(ctx);
-    }
-}
-
-/**
- * Verifica se o limite de processos foi atingido e executa um callback, se necessário.
- *
- * @param {Context} ctx O contexto da mensagem.
- * @param {string} id_video O ID do vídeo a ser verificado.
- * @param {Function} callback A função de callback a ser executada se o limite de processos for atingido.
- */
-const limiteProcessos = async (ctx, id_video, callback) => {
-    const chat_id = ctx.from.id;
-    const user = usuario(ctx);
-    const langCode = user.hasOwnProperty('lang') ? user.lang : 'en';
-
-    // Limita processos!
-    if (cache.existsKey(chat_id, 'queue')) {
-        const queueLength = Object.keys(cache.get(chat_id, 'queue')).length;
-
-        if (queueLength >= 1) {
-            ctx.reply(lang('process_exceeded', langCode, { count: queueLength }));
-            return;
-        }
-
-        for (const item of Object.values(cache.get(chat_id, 'queue'))) {
-            if (item.video == id_video) {
-                ctx.reply(lang('in_process', langCode));
-                return;
-            }
-        }
-    }
-
-    if (callback) {
-        callback(ctx);
-    }
-}
-
-/**
- * Baixar uma musica
- * 
- * @param {import('telegraf').Context} ctx
- * @param {import('../../module/ytdownloader').Audio} music 
- * @param {string} id_video 
- */
-const baixarMusica = async (ctx, music, id_video) => {
-    const chat_id = ctx.from.id;
-    const user = usuario(ctx);
-    const langCode = user.lang || '';
-    let processo_id;
-
-    music.setUrl(`https://music.youtube.com/watch?v=${id_video}`);
-
-    try {
-        await editOrSendMessage(ctx, cache.get(chat_id, 'ultima_msg'), lang('downloading', langCode))
-            .then((id) => cache.update(chat_id, 'ultima_msg', id));
-
-        const isVip = await isUserInGroupOrChannel(ctx);
-        const IsDownloadVip = isVip ? 'downloading_progress_vip' : 'downloading_progress';
-
-        // Obtenha o processo_id do downloadMusic
-        const downloadProcess = music.downloadMusic(id_video, isVip);
-        processo_id = downloadProcess.processo_id;
-
-        downloadProcess.progress(async (progress) => {
-            const text = lang(IsDownloadVip, langCode, {
-                progress: progress.porcentagem,
-                megabytes: progress.baixado
-            });
-
-            const msgId = cache.get(chat_id, 'ultima_msg');
-
-            const updateQueue = (id) => {
-                cache.update(chat_id, 'queue', {
-                    ...cache.get(chat_id, 'queue'),
-                    [processo_id]: {
-                        video: id_video,
-                        ultima_msg: id
-                    }
-                });
-            };
-
-            if (msgId) {
-                await editOrSendMessage(ctx, msgId, text)
-                    .then(updateQueue);
-            } else {
-                const msgIdFromQueue = cache.get(chat_id, 'queue')[processo_id].ultima_msg;
-
-                await editOrSendMessage(ctx, msgIdFromQueue, text)
-                    .then(updateQueue);
-            }
-        }).onComplete(async (result) => {
-            const cache_queue = cache.get(chat_id, 'queue');
-            const msgIdFromQueue = cache_queue[processo_id].ultima_msg;
-            await ctx.deleteMessage(msgIdFromQueue);
-
-            delete cache_queue[processo_id]; // Apaga o processo da lista
-
-            // Atualiza os processos da lista cache
-            cache.update(chat_id, 'queue', cache_queue);
-
-            const { title, artist, duration, capa, song_path } = result;
-            const backup_chat = process.env.backup_channel_id;
-
-            // Enviar para o canal de backup
-            ctx.replyWithAudio({ source: song_path }, {
-                chat_id: backup_chat,
-                performer: artist,
-                title: title,
-                duration: duration,
-                thumbnail: capa,
-                caption: `Request by ${ctx.from.first_name}\n\n**Made by ⚡️ @YoutubeMusicBetaBot**`,
-                parse_mode: 'Markdown'
-            }).then(resp => {
-                // Registra o áudio na tabela "musicas"
-                saveAudioDb(backup_chat, chat_id, resp.audio.file_id, id_video, {
-                    title,
-                    performer: artist,
-                    duration
-                }, capa);
-
-                ctx.sendChatAction("upload_voice");
-
-                ctx.persistentChatAction("upload_voice", () => {
-                    ctx.replyWithAudio(resp.audio.file_id, {
-                        chat_id,
-                        performer: artist,
-                        title: title,
-                        duration: duration,
-                        thumbnail: capa,
-                        caption: `**Made by ⚡️ @YoutubeMusicBetaBot**`,
-                        parse_mode: 'Markdown'
-                    })
-                        .finally(incDownload(resp.audio.file_id));
-                });
-            }).catch(async () => {
-                let cache_queue = cache.get(chat_id, 'queue');
-                await ctx.deleteMessage(cache_queue[processo_id].ultima_msg);
-
-                delete cache_queue[processo_id];
-
-                // Deleta o processo da lista cache
-                cache.update(chat_id, 'queue', cache_queue)
-
-                // Exclui a pasta após o envio para o Telegram
-                fs.rm(result.path, { recursive: true }, (err) => {
-                    if (err) {
-                        console.error(err.message);
-                        return;
-                    }
-                });
-            }).finally(async () => {
-                cache.delete(chat_id, `download_cache_${id_video}`); // Deleta as informações de midia do cache
-
-                let cache_queue = cache.get(chat_id, 'queue');
-
-                delete cache_queue[processo_id];
-
-                // Deleta o processo da lista cache
-                cache.update(chat_id, 'queue', cache_queue)
-
-                // Exclui a pasta após o envio para o Telegram
-                fs.rm(result.path, { recursive: true }, (err) => {
-                    if (err) {
-                        console.error(err.message);
-                        return;
-                    }
-                });
-            });
-        });
-
-        cache.update(chat_id, 'queue', {
-            [processo_id]: {
-                video: id_video,
-                ultima_msg: cache.get(chat_id, 'ultima_msg')
-            }
-        });
-    } catch (error) {
-        // Trate o erro aqui, se necessário
-        console.error(error);
-
-        // Se ocorrer um erro, limpe a fila
-        const cache_queue = cache.get(chat_id, 'queue');
-        if (processo_id && cache_queue[processo_id]) {
-            delete cache_queue[processo_id];
-            cache.update(chat_id, 'queue', cache_queue);
-        }
-
-        cache.delete(chat_id, `download_cache_${id_video}`);
-
-        // Responda ao usuário com uma mensagem de erro
-        await editOrSendMessage(ctx, lang('error_occurred', langCode), null);
-    }
-}
-
-const limparFila = (chat_id, id, video_id) => {
-    let cache_queue = cache.get(chat_id, 'queue');
-
-    delete cache_queue[id];
-
-    cache.update(chat_id, 'queue', cache_queue);
-
-    cache.delete(chat_id, `download_cache_${video_id}`);
-    cache.delete(chat_id, 'update_progress');
-}
-
-/**
- * Baixar uma midia Video/Audio
- * 
- * @param {import('telegraf').Context} ctx 
- * @param {object} params 
- * @returns 
- */
-const baixarMidia = async (ctx, params) => {
-    const chat_id = ctx.from.id;
-    const user = usuario(ctx);
-    const langCode = user.hasOwnProperty('lang') ? user.lang : 'en';
-    const bot_username = (await ctx.telegram.getMe()).username;
-
-    let processo_id;
-
-    const [cmd, video_id, formato, qualidade] = params;
-    const video = new Video();
-
-    if (!cache.existsKey(chat_id, `download_cache_${video_id}`)) {
-        ctx.answerCbQuery(lang('expire_link_cache', langCode), {
-            callback_query_id: ctx.callbackQuery.id,
-            show_alert: true
-        });
-
+    // Link expirado
+    if (!videoData) {
+        await editOrSendMessage(ctx, null, lang('expire_link_cache', langCode), {}, true, downloadingKey);
         return;
     }
 
-    const { id, formato_original, recode } = cache.get(chat_id, `download_cache_${video_id}`).qualidades[formato].qualidades[qualidade];
-    await ctx.deleteMessage(cache.get(chat_id, 'ultima_msg'));
+    // Excede o maximo 15 minutos
+    if (videoData.data.duration > 900) {
+        await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: 15 }), {}, true, downloadingKey);
+        return;
+    }
 
-    video.setUrl(`https://www.youtube.com/watch?v=${video_id}`);
+    // E uma live
+    if (videoData.data.live) {
+        await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: `15m (VIDEO LIVE)` }), {}, true, downloadingKey);
+        return;
+    }
 
-    try {
-        await editOrSendMessage(ctx, cache.get(chat_id, 'ultima_msg'), lang('downloading', langCode))
-            .then((id) => cache.update(chat_id, 'ultima_msg', id));
+    // Cria separador para as qualidades de vídeo e gera os botões em pares para duas colunas
+    const videoButtons = videoData.qualities.videoFormats.length ?
+        videoData.qualities.videoFormats.reduce((acc, format, index, array) => {
+            if (index % 2 === 0) {
+                const nextFormat = array[index + 1];
+                const buttonPair = [{
+                    text: `${vip_qualities.includes(format.quality) ? '⭐️' : ''} ${format.quality} · ${format.fileSize}`,
+                    callback_data: `download ${video_id} ${format.formatId} ${videoData.qualities.audioFormat.formatId} ${vip_qualities.includes(format.quality) ? 'vip' : ''}`
+                }];
 
-        const isVip = await isUserInGroupOrChannel(ctx);
-        const IsDownloadVip = isVip ? 'downloading_progress_vip' : 'downloading_progress';
-
-        // Obtenha o processo_id 
-        const downloadProcess = video.download_convert(video_id, formato_original, formato, qualidade, id, recode, isVip)
-        processo_id = downloadProcess.processo_id;
-
-        if (!processo_id) throw new Error('Erro ao obter o processo_id');
-
-        // Adicione o processo à fila
-        cache.update(chat_id, 'queue', {
-            ...cache.get(chat_id, 'queue'),
-            [processo_id]: {
-                video: video_id,
-                ultima_msg: cache.get(chat_id, 'ultima_msg')
-            }
-        });
-
-        downloadProcess.progress(async (progress) => {
-            const text = lang(IsDownloadVip, langCode, {
-                progress: progress.porcentagem,
-                megabytes: progress.baixado,
-            });
-
-            const msgIdFromQueue = cache.get(chat_id, 'queue')[processo_id]?.ultima_msg;
-
-            const updateQueue = (id) => {
-                cache.update(chat_id, 'queue', {
-                    ...cache.get(chat_id, 'queue'),
-                    [processo_id]: {
-                        ...cache.get(chat_id, 'queue')[processo_id],
-                        ultima_msg: id,
-                    },
-                });
-            };
-
-            // Verifica o cache para controlar o número de mensagens enviadas
-            const updateProgressCache = cache.get(chat_id, 'update_progress') || { time: Date.now(), count: 0 };
-
-            // Define um limite para o número de mensagens em um intervalo de tempo
-            const limiteMensagens = 7; // Ajuste conforme necessário
-            const limiteTempo = 1000; // 1500ms = 1,5 segundos, ajuste conforme necessário
-
-            if (updateProgressCache.count >= limiteMensagens && (Date.now() - updateProgressCache.time) < limiteTempo) {
-                // Se estiver entrando em spam, não envie mensagens até que o progresso seja próximo de 100%
-                if (progress.porcentagem >= 98) {
-                    await editOrSendMessage(ctx, msgIdFromQueue, text)
-                        .then(updateQueue);
+                if (nextFormat) {
+                    buttonPair.push({
+                        text: `${vip_qualities.includes(nextFormat.quality) ? '⭐️' : ''} ${nextFormat.quality} · ${nextFormat.fileSize}`,
+                        callback_data: `download ${video_id} ${nextFormat.formatId} ${videoData.qualities.audioFormat.formatId} ${vip_qualities.includes(nextFormat.quality) ? 'vip' : ''}`
+                    });
                 }
 
-                return;
-            } else {
-                // Atualize o cache com o número de mensagens enviadas
-                cache.update(chat_id, 'update_progress', { time: Date.now(), count: updateProgressCache.count + 1 });
-
-                await sleep(1000);
-
-                await editOrSendMessage(ctx, msgIdFromQueue, text).then(updateQueue);
+                acc.push(buttonPair);
             }
+            return acc;
+        }, [[{ text: `👇 Qualities in "Video" 👇`, callback_data: 'download_format' }]]) : [];
+
+    // Cria separador e botão para a qualidade de áudio
+    const audioButton = videoData.qualities.audioFormat ? [
+        [{ text: `👇 Qualities in "Audio" 👇`, callback_data: 'download_format' }],
+        [{
+            text: `🎵 Audio Only · ${videoData.qualities.audioFormat.fileSize}`,
+            callback_data: `download ${video_id} ${videoData.qualities.audioFormat.formatId}`
+        }]
+    ] : [];
+
+    // Combina botões de vídeo e áudio
+    let buttons = [...videoButtons, ...audioButton];
+
+    if (!buttons.length) {
+        await editOrSendMessage(ctx, null, lang('error_get_qualities', langCode), {}, true, downloadingKey);
+        return;
+    }
+
+    buttons = [...buttons, [{
+        text: `✨ Summarize Video`,
+        callback_data: `summarize ${video_id}`
+    }]];
+
+    await editOrSendMessage(ctx, null, `*${videoData.data.title}*\n`
+        + `\n• 📺 [${videoData.data.channel}](${videoData.data.channel_url}) ${videoData.data.channel_is_verified ? '⭐' : ''} _(${shortNumerals(videoData.data.channel_follower_count)} subs)_`
+        + `\n• 🗓 ${friendlyDate(videoData.data.upload_date, langCode)}`
+        + `\n• ⏰ ${videoData.data.duration < 60 ? '0:' + videoData.data.duration : videoData.data.duration_string} | `
+        + `👁 ${shortNumerals(videoData.data.view_count)} views`
+        + `\n• 📜 _${shortText(videoData.data.description.replace(/\r?\n|\r/g, " ") || 'No description...', 60)}_`
+        + `${videoData.data.tags.length ? '\n• 🔖 `' + shortText(videoData.data.tags.map(tag => `#${tag}`).join(', '), 60) + '`' : ''}`
+        + `[ㅤ](${videoData.data.thumbnail})\n`
+        + `\n_${lang('select_quality', langCode)}_`, {
+        reply_markup: {
+            inline_keyboard: buttons
+        },
+    }, true, downloadingKey);
+}
+
+/**
+ * Baixa ou video, converte para MP4/MP3
+ * 
+ * @param {import('telegraf').Context} ctx - Contexto do Telegraf com informações da query inline e do usuário.
+ */
+async function mediaDownload(ctx, { video_id, format_id, audio_id = undefined }) {
+    const chat_id = ctx.from.id;
+    const langCode = await User.getLang(chat_id);
+    const vip = await isUserInGroupOrChannel(ctx);
+
+    const progresskey = `PROGRESS_LAST_MSG:${chat_id}:${video_id}`;
+    const queueKey = `DOWNLOADS:${chat_id}`;
+    const downloadingKey = `DOWNLOADING_LAST_MSG:${chat_id}:${video_id}`;
+
+    const videoData = await redisRecovery(`VIDEO_DATA:${video_id}`);
+    let lastProgress = await redisRecovery(progresskey);
+
+    if (!videoData) {
+        await editOrSendMessage(ctx, null, lang('expire_link_cache', langCode), {}, true, downloadingKey);
+        return;
+    }
+
+    // Traz do cache
+    const midia = await MidiaCache.getMidia(video_id);
+    if (midia?.file_id && !audio_id) {
+        const username = ctx.botInfo.username;
+        const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username });
+        try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.error(error); }
+        await ctx.sendChatAction('upload_voice');
+        const downloads = shortNumerals(await MidiaCache.countDownloads(video_id));
+        const copyMsg = await ctx.telegram.copyMessage(ctx.from.id, midia.repo_id, midia.message_id, {
+            parse_mode: 'Markdown',
+            caption: `📥 ${downloads} Download(s)\n\n*Made by ⚡️ @${ctx.botInfo.username}*`,
+            reply_markup: { inline_keyboard: [[{ text, url }]] }
         });
+        await ctx.setMessageReaction(ctx.from.id, copyMsg.message_id, "⚡");
+        await MidiaCache.addDownload(video_id);
+        return;
+    }
 
-        downloadProcess.onComplete(async (data) => {
-            const informacoes = cache.get(chat_id, `download_cache_${video_id}`).informacoes;
+    // Excede o maximo 15 minutos
+    if (videoData.data.duration > 900) {
+        await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: 15 }), {}, true, downloadingKey);
+        return;
+    }
 
-            let { pasta, arquivo, nome, recode } = data;
-            const nomeArquivo = video.fileNameReplace(informacoes.title);
+    if (await redisProcesses(queueKey).count() >= 1) {
+        let countProcess = await redisProcesses(queueKey).count();
 
-            if (recode) {
-                const ffmpegConverter = ffmpeg(arquivo, `${pasta}/${nomeArquivo}_${qualidade}.${formato}`, qualidade);
+        await editOrSendMessage(ctx, null, lang('process_exceeded', langCode, {
+            count: countProcess
+        }), {}, true, downloadingKey);
+        return;
+    }
 
-                ffmpegConverter.start()
-                    .progress(async (progress) => {
-                        const msgIdFromQueue = cache.get(chat_id, 'queue')[processo_id]?.ultima_msg;
+    const fetchVideo = new YoutubeVideo(video_id);
+    await editOrSendMessage(ctx, null, lang('downloading', langCode), {}, true, downloadingKey);
+    const join_link = await getInviteLinks(ctx);
 
-                        const updateQueue = (id) => cache.update(chat_id, 'queue', {
-                            ...cache.get(chat_id, 'queue'),
-                            [processo_id]: {
-                                ...cache.get(chat_id, 'queue')[processo_id],
-                                ultima_msg: id
+    fetchVideo.downloadVideo(video_id, format_id, audio_id, vip)
+        .then(async (processQueue) => {
+            await redisProcesses(queueKey).add(processQueue.processId); // Add +1 processo para o usuario.
+
+            redisRemember(progresskey, async () => ({ message_id: await redisRecovery(downloadingKey), time: Date.now() }));
+
+            processQueue.progress(async ({ porcentagem, baixado, velocidade, converting }) => {
+                lastProgress = await redisRecovery(progresskey), now = Date.now();
+
+                if (!lastProgress || (now - lastProgress.time) >= 2500) {
+                    const statusLang = (converting == true) ? 'converting' : (vip ? 'downloading_progress_vip' : 'downloading_progress');
+                    const text = lang(statusLang, langCode, { progress: porcentagem, speed: velocidade, join_link });
+
+                    await editOrSendMessage(ctx, null, text, { disable_web_page_preview: true }, true, downloadingKey)
+                        .then(async ({ message_id }) => await redisClient.set(progresskey, JSON.stringify({ message_id, time: now })));
+                }
+            }).onComplete(async ({ file_name, source, folder_download, size, createdAt, width, height }) => {
+                const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username: ctx.botInfo.username });
+                const api_url = 'https://filebin.net', bin_name = folder_download?.split('/').pop() || 'download';
+
+                // Tamanho maior que 50mb
+                if (size >= 52428800) {
+                    await editOrSendMessage(ctx, null, lang('big_file', langCode), {}, true, downloadingKey);
+
+                    try {
+                        const { httpCode, headers, body } = await curlRequest(`${api_url}/${bin_name}/${formatFilename(file_name)}`, 'POST', { input_file: source }, {
+                            'accept': 'application/json',
+                            'cid': '@YoutubeMusicBetaBot',
+                            'Content-Type': 'application/octet-stream'
+                        });
+
+                        if (httpCode === 201) {
+                            const description = lang('link_file_download', langCode)
+                                + `\n\n• 📄 \`${body.file.filename}\` (${body.file.bytes_readable})`
+                                + `\n• 🔗 [Download Link](${api_url}/${bin_name})`
+                                + `\n• ⏳ _${body.bin.expired_at_relative}_`;
+
+                            await editOrSendMessage(ctx, null, description, {
+                                reply_markup: {
+                                    inline_keyboard: [
+                                        [{ text, url }],
+                                        [{ text: 'Download Link', url: `${api_url}/${bin_name}` }]
+                                    ]
+                                }
+                            }, true, downloadingKey)
+                                .then(async ({ message_id }) => await ctx.setMessageReaction(ctx.from.id, message_id, "😁"));
+                        }
+                    } catch (error) {
+                        Logger.error(error);
+
+                        ctx.chat.id = ctx.from.id;
+                        await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
+                    }
+                } else {
+                    try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.error(error) }
+
+                    try {
+                        const ext = file_name.slice(-4).toLowerCase();
+                        const chatAction = ['.mp3', '.m4a', '.wav'].includes(ext) ? 'upload_voice' : ['.mp4', '.mkv'].includes(ext) ? 'upload_video' : '';
+
+                        if (chatAction === 'upload_voice') {
+                            ctx.chat.id = env('CACHE_CHANNEL');
+                        }
+
+                        // Preparar os parâmetros comuns para sendAudioOrVideo
+                        const commonParams = {
+                            caption: chatAction === 'upload_voice' ? `Enviado por *${ctx.chat.first_name} ${ctx.chat?.last_name || ''}*` : `*Made by ⚡️ @${ctx.botInfo.username}*`,
+                            duration: videoData.data.duration,
+                            performer: videoData.data.channel,
+                            title: videoData.data.title,
+                            thumbnail: { url: `https://i.ytimg.com/vi/${video_id}/default.jpg` },
+                            parse_mode: 'Markdown',
+                            width,
+                            height
+                        };
+
+                        // Adicionar reply_markup apenas se não for 'upload_voice'
+                        if (chatAction !== 'upload_voice') {
+                            commonParams.reply_markup = { inline_keyboard: [[{ text, url }]] };
+                        }
+
+                        // Se for audio manda para canal de cache! Se não envia sem fazer cache.
+                        await sendAudioOrVideo(ctx, source, commonParams)
+                            .then(async ({ message_id, audio }) => {
+                                // Copia do canal de cache, Envia para usuario
+                                if (chatAction === 'upload_voice') {
+                                    try {
+                                        await MidiaCache.createMidia({
+                                            file_id: audio.file_id,
+                                            id_telegram: ctx.from.id,
+                                            repo_id: env('CACHE_CHANNEL'),
+                                            message_id: message_id,
+                                            youtube_id: video_id
+                                        })
+
+                                        await MidiaCache.addDownload(video_id);
+                                    } catch (error) {
+                                        Logger.error(error);
+                                    }
+
+                                    await ctx.sendChatAction(chatAction);
+
+                                    // Copia do canal de cache, Envia para usuario
+                                    const copyMsg = await ctx.telegram.copyMessage(ctx.from.id, env('CACHE_CHANNEL'), message_id, {
+                                        parse_mode: 'Markdown',
+                                        caption: `*Made by ⚡️ @${ctx.botInfo.username}*`,
+                                        reply_markup: {
+                                            inline_keyboard: [[{ text, url }]]
+                                        }
+                                    });
+
+                                    await ctx.setMessageReaction(ctx.from.id, copyMsg.message_id, "😁");
+                                } else {
+                                    await ctx.setMessageReaction(ctx.from.id, message_id, "😁")
+                                }
+                            });
+                    } catch (error) {
+                        Logger.error(error);
+
+                        ctx.chat.id = ctx.from.id;
+                        await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
+                    }
+                }
+
+                folder_download && fs.rm(folder_download, { recursive: true }, (err) => err && console.error(err.message));
+
+                await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
+                redisClient.del(progresskey); // Remove o cache de controle progresso.
+                redisClient.del(`VIDEO_DATA:${video_id}`)
+            }).onError(async (error) => {
+                Logger.error(error);
+                await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
+                await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
+                redisClient.del(progresskey); // Remove o cache de controle progresso.
+            });
+        });
+}
+
+/**
+ * Baixa musicas do Youtube Music.
+ * 
+ * @param {import('telegraf').Context} ctx - Contexto do Telegraf com informações da query inline e do usuário.
+ * @param {string} video_id 
+ */
+async function musicDownload(ctx, video_id) {
+    const chat_id = ctx.from.id;
+    const langCode = await User.getLang(chat_id);
+    const vip = await isUserInGroupOrChannel(ctx);
+
+    const progresskey = `PROGRESS_LAST_MSG:${chat_id}:${video_id}`;
+    const queueKey = `DOWNLOADS:${chat_id}`;
+    const downloadingKey = `DOWNLOADING_LAST_MSG:${chat_id}:${video_id}`;
+
+    const videoData = await redisRecovery(`VIDEO_DATA:${video_id}`);
+    let lastProgress = await redisRecovery(progresskey);
+
+    // Link expirado
+    if (!videoData) {
+        await editOrSendMessage(ctx, null, lang('expire_link_cache', langCode), {}, true, downloadingKey);
+        return;
+    }
+
+    // Excede o maximo 15 minutos
+    if (videoData.data.duration > 900) {
+        await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: 15 }), {}, true, downloadingKey);
+        return;
+    }
+
+    // E uma live
+    if (videoData.data.live) {
+        await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: `15m (VIDEO LIVE)` }), {}, true, downloadingKey);
+        return;
+    }
+
+    const midia = await MidiaCache.getMidia(video_id);
+    if (midia?.file_id) {
+        const username = ctx.botInfo.username;
+        const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username });
+        try { await ctx.deleteMessage(await redisRecovery(downloadingKey)); } catch (error) { Logger.error(error); }
+        await ctx.sendChatAction('upload_voice');
+        const downloads = shortNumerals(await MidiaCache.countDownloads(video_id));
+        const copyMsg = await ctx.telegram.copyMessage(ctx.from.id, midia.repo_id, midia.message_id, {
+            parse_mode: 'Markdown',
+            caption: `📥 ${downloads} Download(s)\n\n*Made by ⚡️ @${ctx.botInfo.username}*`,
+            reply_markup: { inline_keyboard: [[{ text, url }]] }
+        });
+        await ctx.setMessageReaction(ctx.from.id, copyMsg.message_id, "⚡");
+        await MidiaCache.addDownload(video_id);
+        return;
+    }
+
+    if (await redisProcesses(queueKey).count() >= 1) {
+        let countProcess = await redisProcesses(queueKey).count();
+
+        await editOrSendMessage(ctx, null, lang('process_exceeded', langCode, {
+            count: countProcess
+        }), {}, true, downloadingKey);
+        return;
+    }
+
+    const fetchMusic = new YoutubeAudio(video_id);
+    await editOrSendMessage(ctx, null, lang('downloading', langCode), {}, true, downloadingKey);
+    const join_link = await getInviteLinks(ctx);
+
+    fetchMusic.downloadMusic(video_id, vip)
+        .then(async (processQueue) => {
+            await redisProcesses(queueKey).add(processQueue.processId); // Add +1 processo para o usuario.
+            redisRemember(progresskey, async () => ({
+                message_id: await redisRecovery(downloadingKey), time: Date.now()
+            }));
+
+            processQueue.progress(async ({ porcentagem, baixado, velocidade, converting }) => {
+                lastProgress = await redisRecovery(progresskey), now = Date.now();
+
+                if (!lastProgress || (now - lastProgress.time) >= 2500) {
+                    const statusLang = (converting == true) ? 'converting' : (vip ? 'downloading_progress_vip' : 'downloading_progress');
+                    const text = lang(statusLang, langCode, { progress: porcentagem, speed: velocidade, join_link });
+
+                    await editOrSendMessage(ctx, null, text, { disable_web_page_preview: true }, true, downloadingKey)
+                        .then(async ({ message_id }) => {
+                            await redisClient.set(progresskey, JSON.stringify({ message_id, time: now }))
+                        });
+                }
+            }).onComplete(async ({ file_name, source, thumbnail, folder_download, size, createdAt, extra }) => {
+                const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username: ctx.botInfo.username });
+
+                // Deleta a mensagem de download.
+                try { await ctx.deleteMessage(await redisRecovery(downloadingKey)) }
+                catch (error) { Logger.error(error); }
+
+                try {
+                    ctx.chat.id = env('CACHE_CHANNEL');
+
+                    await sendAudioOrVideo(ctx, source, {
+                        title: extra.title,
+                        performer: extra.artist,
+                        thumbnail: { source: thumbnail },
+                        duration: extra.duration,
+                        caption: `Enviado por *${ctx.chat.first_name} ${ctx.chat?.last_name || ''}*`,
+                        parse_mode: 'Markdown',
+                    }).then(async ({ message_id, audio }) => {
+                        try {
+                            await MidiaCache.createMidia({
+                                title: `${extra.title} - ${extra.artist || ''}`,
+                                file_id: audio.file_id,
+                                id_telegram: ctx.from.id,
+                                repo_id: env('CACHE_CHANNEL'),
+                                message_id: message_id,
+                                youtube_id: video_id
+                            });
+
+                            await MidiaCache.addDownload(video_id);
+                        } catch (error) {
+                            Logger.error(error);
+                        }
+
+                        await ctx.sendChatAction('upload_voice');
+                        // Copia do canal de cache, Envia para usuario
+                        const copyMsg = await ctx.telegram.copyMessage(ctx.from.id, env('CACHE_CHANNEL'), message_id, {
+                            parse_mode: 'Markdown',
+                            caption: `*Made by ⚡️ @${ctx.botInfo.username}*`,
+                            reply_markup: {
+                                inline_keyboard: [[{ text, url }]]
                             }
                         });
 
-                        await sleep(1000);
-
-                        await editOrSendMessage(ctx, msgIdFromQueue, lang('converting', langCode, { progress: progress.porcentagem }))
-                            .then(updateQueue);
-                    })
-                    .onComplete(async (result) => {
-                        await ctx.deleteMessage(cache.get(chat_id, 'ultima_msg'));
-
-                        let { arquivo } = result;
-
-                        let text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username: bot_username });
-
-                        try {
-                            await sendAudioOrVideo(ctx, arquivo, {
-                                caption: `${informacoes.title}\n\n**Made by ⚡️ @YoutubeMusicBetaBot**`,
-                                parse_mode: 'Markdown',
-                                reply_markup: {
-                                    inline_keyboard: [
-                                        [{ text, url }]
-                                    ]
-                                }
-                            }).catch(() => {
-                                fs.rm(pasta, { recursive: true }, (err) => err && console.error(err.message));
-                                limparFila(chat_id, processo_id, video_id)
-                            }).finally(async () => {
-                                fs.rm(pasta, { recursive: true }, (err) => err && console.error(err.message));
-                                limparFila(chat_id, processo_id, video_id);
-                            })
-                        } catch (error) {
-                            console.error(error)
-                            fs.rm(pasta, { recursive: true }, (err) => err && console.error(err.message));
-                            limparFila(chat_id, processo_id, video_id)
-                        }
+                        await ctx.setMessageReaction(ctx.from.id, copyMsg.message_id, "😁");
                     });
-            } else {
-                let text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username: bot_username });
-
-                try {
-                    await sendAudioOrVideo(ctx, arquivo, {
-                        caption: `${informacoes.title}\n\n**Made by ⚡️ @YoutubeMusicBetaBot**`,
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text, url }]
-                            ]
-                        }
-                    }).catch(() => {
-                        fs.rm(pasta, { recursive: true }, (err) => err && console.error(err.message));
-                        limparFila(chat_id, processo_id, video_id)
-                    }).finally(async () => {
-                        fs.rm(pasta, { recursive: true }, (err) => err && console.error(err.message));
-                        limparFila(chat_id, processo_id, video_id)
-                    })
                 } catch (error) {
-                    console.error(error)
-                    fs.rm(pasta, { recursive: true }, (err) => err && console.error(err.message));
-                    limparFila(chat_id, processo_id, video_id)
+                    Logger.error(error);
+                    ctx.chat.id = ctx.from.id;
+                    await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
                 }
-            }
+
+                folder_download && fs.rm(folder_download, { recursive: true }, (err) => err && console.error(err.message));
+
+                await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
+                redisClient.del(progresskey); // Remove o cache de controle progresso.
+                redisClient.del(`VIDEO_DATA:${video_id}`)
+
+                Logger.info(`Download Musica, concluído: ${video_id}`);
+            }).onError(async (error) => {
+                Logger.error(error);
+                await editOrSendMessage(ctx, null, lang('error_upload', langCode), {}, true, downloadingKey);
+                await redisProcesses(queueKey).rem(processQueue.processId); // Remove -1 processo para o usuario.
+                redisClient.del(progresskey); // Remove o cache de controle progresso.
+            });
         });
-    } catch (error) {
-        // Trate o erro aqui, se necessário
-        console.error(error);
+}
 
-        limparFila(chat_id, processo_id, video_id)
+/**
+ * Busca músicas usando uma query fornecida pelo usuário, combinando resultados do cache local e uma fonte externa. Prioriza músicas do cache, exclui duplicatas pelo youtube_id, e envia respostas paginadas da query inline.
+ * 
+ * @param {import('telegraf').Context} ctx - Contexto do Telegraf com informações da query inline e do usuário.
+ * @param {string} inlineQuery - Query de busca do usuário.
+ * @returns {Promise<void>} Promessa resolvida com o envio da resposta da query inline.
+ * 
+ * @async
+ * Verifica o tamanho da query (> 3 caracteres) e o debounce time antes de buscar. Combina resultados do cache e externos, excluindo duplicatas, para a resposta.
+ */
+async function inlineMusicSearch(ctx, inlineQuery) {
+    const PAGE_SIZE = 4;
+    const DEBOUNCE_TIME = 1000;
+    const query = inlineQuery.toLowerCase();
+    const offset = parseInt(ctx.inlineQuery.offset) || 0;
+    const userId = ctx.from.id;
+    const langCode = await User.getLang(userId);
+    const text = lang('share_this_bot', langCode), url = lang('share_link', langCode, { username: ctx.botInfo.username });
 
-        // Responda ao usuário com uma mensagem de erro
-        await editOrSendMessage(ctx, lang('error_occurred', langCode), null);
+    if (query.length < 3) {
+        return ctx.answerInlineQuery([], {
+            switch_pm_text: lang('inline_enter_search', this.lang),
+            switch_pm_parameter: 'search'
+        });
     }
+
+    const lastSearchTime = await redisClient.get(`LAST_INLINE_SEARCH:${userId}`);
+    const currentTime = Date.now();
+
+    if (lastSearchTime && currentTime - lastSearchTime < DEBOUNCE_TIME) {
+        return;
+    }
+
+    await redisClient.setEx(`LAST_INLINE_SEARCH:${userId}`, 120, currentTime.toString());
+
+    // Busca músicas no cache
+    const cachedMusics = await MidiaCache.getByTitle(query);
+    let cachedResults = cachedMusics.map((music) => ({
+        type: 'audio',
+        id: String(music.id),
+        audio_file_id: music.file_id,
+        youtube_id: music.youtube_id,
+        title: music.title,
+        downloads: music.downloads
+    }));
+
+    let searchResult = await searchMusics(query);
+    searchResult = searchResult.filter(item => !cachedMusics.some(cached => cached.youtube_id === item.youtubeId));
+
+    let externalResults = searchResult.map((item) => ({
+        type: 'article',
+        id: item.youtubeId,
+        title: item.title,
+        description: `• Artist: ${item.artists.map(artist => artist.name).join(', ') || 'N/A'}`
+            + `\n• Album: ${item.album || 'N/A'}`
+            + `\n• Duration: ${item.duration.label || '0:00'}`,
+        thumb_url: item.thumbnailUrl,
+        hide_url: true,
+        url: `https://www.youtube.com/embed/${item.youtubeId}`,
+        input_message_content: {
+            message_text: `https://music.youtube.com/watch?v=${item.youtubeId}`,
+        },
+    }));
+
+    let combinedResults = [...cachedResults.map(result => ({
+        type: result.type,
+        id: result.id,
+        audio_file_id: result.audio_file_id,
+        parse_mode: 'Markdown',
+        caption: `📥 ${shortNumerals(result.downloads)} Download(s)\n\n*Made by ⚡️ @${ctx.botInfo.username}*`,
+        reply_markup: {
+            inline_keyboard: [[{ text, url }]]
+        },
+    })), ...externalResults];
+
+    const paginatedResults = combinedResults.slice(offset, offset + PAGE_SIZE);
+    const nextOffset = offset + PAGE_SIZE < combinedResults.length ? offset + PAGE_SIZE : '';
+
+    return await ctx.telegram.answerInlineQuery(ctx.inlineQuery.id, paginatedResults, {
+        cache_time: 60,
+        next_offset: nextOffset.toString(),
+    });
 }
 
 module.exports = {
-    getFormatosButtons,
-    baixarMusica,
-    baixarMidia,
-    forwardCacheMusica,
-    limiteProcessos
-}
+    fetchVideoOptions,
+    mediaDownload,
+    musicDownload,
+    inlineMusicSearch,
+    specialRegex
+};

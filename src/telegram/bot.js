@@ -1,294 +1,281 @@
-const Database = require('better-sqlite3');
+const redisClient = require('../module/redisClient');
+const sequelize = require('../../database/connection');
+
 const { Telegraf } = require('telegraf');
 
-const fs = require('fs');
-const path = require('path');
+const { User, MidiaCache } = require('../../models');
 
-const { resolve_path, env, saveLog, isBanned, lang, usuario, editOrSendMessage, updateTypeOrigin } = require('../module/functions');
+const { YoutubeVideo } = require('../module/ytdownloader');
+const { specialRegex } = require('./commands/download');
 
-const SessionManager = require('../module/sessionmanager');
-const { Audio, Video } = require('../module/ytdownloader');
-
-// Comandos
-const { getTotalUsuarios, getTotalMusicas, banirOuDesbanirUsuario } = require('./commands/admin');
-const { getFormatosButtons, baixarMusica, baixarMidia, forwardCacheMusica, limiteProcessos } = require('./commands/download');
-const startCmd = require('../telegram/commands/start');
-const helpCmd = require('../telegram/commands/help');
-const { langsCmd, setLang } = require('../telegram/commands/lang');
-const killQueueCmd = require('./commands/kill');
+const { lang, Logger, updateTypeOrigin, env, callCommand, redisRemember, sleep, isUserInGroupOrChannel, editOrSendMessage } = require('../module/functions');
 
 class TelegramBot {
 	constructor() {
-		this.db = new Database(resolve_path('database/bot.sqlite'));
-		this.bot = new Telegraf(env('bot_token'));
-		this.cache = new SessionManager(), this.cache.initDatabase();
+		this.bot = new Telegraf(process.env.BOT_TOKEN);
+		this.lang = 'en';
 
-		// Inicializa as tabelas caso não exista.
-		this.initDatabase();
+		// Sincronizar Models
+		(async () => await sequelize.sync({ force: true, logging: false }))();
 	}
 
 	middlewares() {
-		let contagemMensagens = {};
-
+		// Middleware para sair de grupos não permitidos
 		this.bot.use(async (ctx, next) => {
-			const limiteMensagens = 2; // Limite de mensagens em um curto período
-			const limiteTempo = 1; // Limite de tempo em segundos (1 minuto)
-			const limiteStatus = 0; // Status a ser definido se o limite for excedido
+			const chat_id = ctx.chat?.id;
+			const title = ctx.chat?.title;
 
-			const chat_id = ctx.from.id;
-			const agora = Math.floor(Date.now() / 1000); // Tempo atual em segundos
-
-			// Verifica se o chat_id já está na contagem de mensagens
-			if (!contagemMensagens[chat_id]) {
-				contagemMensagens[chat_id] = { mensagens: 0, timestamp: agora };
+			// Sai de grupo/canais não autorizados!
+			if (
+				['group', 'channel', 'chat_member'].includes(updateTypeOrigin(ctx)) &&
+				env('CHATS_AllOWED').includes(chat_id) !== true
+			) {
+				await ctx.telegram.leaveChat(chat_id)
+					.then((result) => Logger.debug(`Saindo do grupo/canal: ${title || chat_id}`))
+					.catch((data) => Logger.error(`Erro ao sair do grupo/canal: ${title || chat_id}`))
+				return;
 			}
 
-			const atividadeCache = this.cache.get(chat_id, 'atividade_cache');
-
-			// Verifica se o limite de tempo foi excedido
-			if (agora - contagemMensagens[chat_id].timestamp >= limiteTempo) {
-				// Redefine a contagem de mensagens e o timestamp se o limite de tempo foi excedido
-				contagemMensagens[chat_id] = { mensagens: 0, timestamp: agora };
-			}
-
-			// Verifica se o usuário está banido (status 0) e se passou uma hora
-			if (atividadeCache && agora - atividadeCache.timestamp >= 60) { // 3600
-				// Atualiza o status para 1
-				this.db.prepare('UPDATE usuarios SET status = 1 WHERE chat_id = ?').run(chat_id);
-
-				// Remove o cache de atividade
-				this.cache.delete(chat_id, 'atividade_cache');
-				this.cache.delete(chat_id, 'msg_banido');
-			}
-
-			// Incrementa a contagem de mensagens
-			contagemMensagens[chat_id].mensagens++;
-
-			// Verifica se o limite de mensagens foi excedido
-			if (contagemMensagens[chat_id].mensagens > limiteMensagens) {
-				// Define o status do usuário como o limiteStatus se o limite de mensagens foi excedido
-				this.db.prepare('UPDATE usuarios SET status = ? WHERE chat_id = ?').run(limiteStatus, chat_id);
-
-				// Define o cache de atividade para controlar o tempo
-				this.cache.update(chat_id, 'atividade_cache', { timestamp: agora });
-			}
-
-			// Continue para o próximo middleware ou manipulador
 			await next();
 		});
 
-
+		// Middleware para responder somente chats privados
 		this.bot.use(async (ctx, next) => {
-			const chat_id = ctx.chat.id;
-			const user = usuario(ctx)
-			const langCode = user ? user.lang : 'en';
+			if (['private', 'inline'].includes(updateTypeOrigin(ctx))) {
+				await next();
+			}
+		});
 
-			// Canais não autorizados
-			if (ctx.update.my_chat_member && !env('canais_permitidos').includes(chat_id)) {
-				await ctx.telegram.leaveChat(chat_id)
-					.then((resp) => saveLog(`Saindo do grupo/canal: ${ctx.chat.title}`))
-					.catch((data) => saveLog(`Erro ao sair do grupo/canal: ${ctx.chat.title}`, 'erros'))
-
+		// Midleware para avisar que estamos em manutenção.
+		this.bot.use(async (ctx, next) => {
+			this.lang = await User.getLang(ctx.from?.id) || 'en';
+			if (env('NODE_ENV') === 'development' && !env('ADMIN').includes(ctx.from?.id)) {
+				if (ctx.message) return ctx.reply(lang('maintenance', this.lang));
+				ctx.callbackQuery?.id && ctx.answerCbQuery(lang('maintenance', this.lang));
+				ctx.inlineQuery?.id && ctx.answerInlineQuery([], {
+					switch_pm_text: lang('maintenance', this.lang),
+					switch_pm_parameter: 'search'
+				});
 				return;
 			}
+			await next();
+		});
 
-			// Reporte de log's
-			saveLog(ctx.update);
+		// Middleware para obter o idioma do usuário.
+		this.bot.use(async (ctx, next) => {
+			const chat_id = ctx?.from?.id;
+			await User.getUser({ id_telegram: chat_id, lang: ctx.from.language_code });
+			this.lang = await User.getLang(chat_id);
+			await next();
+		});
 
-			if (updateTypeOrigin(ctx) !== 'private') return;
+		// Middleware para atualizar placeholder lista de comandos
+		this.bot.use(async (ctx, next) => {
+			ctx.telegram.setMyCommands(lang('commands', this.lang));
+			await next();
+		});
 
-			if (!this.cache.exists(chat_id)) {
-				this.cache.set(chat_id, {}, null);
+		// Middleware para barrar usuários banidos no banco de dados
+		this.bot.use(async (ctx, next) => {
+			const isBanned = await User.isBanned(ctx.from.id);
+			if (!env('ADMIN').includes(ctx.from.id) && isBanned) {
+				return;
 			}
+			await next();
+		});
 
-			// Usuarios banidos
-			if (isBanned(ctx, this.db) && chat_id != env('admin')) {
-				// Verifica se existe a chave 'msg_banido' no cache
-				if (this.cache.existsKey(chat_id, 'msg_banido')) {
-					const lastMsgTime = new Date(this.cache.get(chat_id, 'msg_banido'));
-					const currentTime = new Date();
-					const oneDay = 24 * 60 * 60 * 1000; // Um dia em milissegundos
+		// Middleware para controlar a frequência de mensagens dos usuários
+		this.bot.use(async (ctx, next) => {
+			if (updateTypeOrigin(ctx) === 'private' && ctx.message) {
+				const chat_id = ctx.from.id;
 
-					// Verifica se passou pelo menos um dia desde a última mensagem
-					if (currentTime - lastMsgTime >= oneDay) {
-						ctx.reply(lang('you_banned', langCode))
-							.then(() => {
-								// Atualiza a chave 'msg_banido' com o novo tempo
-								this.cache.update(chat_id, 'msg_banido', currentTime);
-							});
-					}
-				} else {
-					// Se a chave 'msg_banido' não existir, envie a mensagem e defina o tempo atual
-					ctx.reply(lang('you_banned', langCode))
-						.then(() => {
-							const currentTime = new Date();
-							this.cache.update(chat_id, 'msg_banido', currentTime);
-						});
+				await User.getUser({ id_telegram: chat_id, lang: ctx.from.language_code });
+				const limitRPS = 3, banDuration = 3600, now = Math.floor(Date.now() / 1000);
+
+				// Tenta recuperar o cacheCount como uma string JSON
+				const cacheCountJson = await redisClient.get(`ANTI_SPAM_COOLDOWN:${chat_id}`);
+				let cacheCount = cacheCountJson ? JSON.parse(cacheCountJson) : null;
+				let messages = cacheCount ? parseInt(cacheCount.messages) : 0;
+				let timestamp = cacheCount ? parseInt(cacheCount.timestamp) : now;
+
+				// Reseta a contagem se passou 1 segundo desde a última mensagem
+				messages = (now - timestamp >= 1) ? 1 : messages + 1;
+
+				// Atualiza o cache com o novo estado
+				await redisClient.set(`ANTI_SPAM_COOLDOWN:${chat_id}`, JSON.stringify({ messages, timestamp: now }));
+
+				const isBanned = await redisClient.get(`TEMPORARILY_BANNED:${chat_id}`) !== null;
+				const banEnd = isBanned ? parseInt(await redisClient.get(`TEMPORARILY_BANNED:${chat_id}`)) : 0;
+
+				if (isBanned && now > banEnd) {
+					await redisClient.del(`TEMPORARILY_BANNED:${chat_id}`);
+					await ctx.reply("You have been unbanned and can send messages again.");
+				} else if (!isBanned && messages > limitRPS) {
+					await redisClient.set(`TEMPORARILY_BANNED:${chat_id}`, now + banDuration, 'EX', banDuration);
+					await ctx.reply(lang('you_banned', this.lang), {
+						parse_mode: 'Markdown',
+					});
 				}
-				return;
+
+				// Bloqueia a execução se o usuário estiver banido
+				if (isBanned && now <= banEnd) return;
 			}
 
-			ctx.telegram.setMyCommands(lang('commands', langCode), {
-				language_code: langCode,
-			})
+			await next();
+		});
 
-			next();
+		// Middleware para adicionar um setMessageReaction ao ctx
+		this.bot.use((ctx, next) => {
+			ctx.setMessageReaction = async function (chat_id = null, message_id, reaction, is_big = false) {
+				try {
+					return await ctx.telegram.callApi('setMessageReaction', {
+						chat_id: chat_id || ctx.chat.id,
+						message_id,
+						reaction: JSON.stringify([{ type: 'emoji', emoji: reaction, }]),
+						is_big: is_big
+					});
+				} catch (error) {
+					Logger.error('Erro ao definir a reação', error)
+					return false;
+				}
+			};
+
+			return next();
+		});
+
+		// Middleware para adicionar um addDownload ao audio resgatado do cache
+		this.bot.use(async (ctx, next) => {
+			this.bot.on('audio', async (ctx) => {
+				if (ctx.message.via_bot && ctx.message.via_bot.id === ctx.botInfo.id) {
+					const musicIdentifier = `${ctx.message.audio.title} - ${ctx.message.audio.performer}`;
+					await MidiaCache.addDownload(musicIdentifier);
+					await ctx.setMessageReaction(ctx.from.id, ctx.message.message_id, "⚡");
+				}
+			});
+
+			await next();
 		});
 	}
 
-	/**
-	 * Inicializa o banco de dados criando as tabela do bot, se ela não existir.
-	 */
-	initDatabase() {
-		this.db.transaction(() => {
-			this.db.exec(`
-                CREATE TABLE IF NOT EXISTS usuarios (
-                    chat_id INTEGER PRIMARY KEY NOT NULL,
-                    lang TEXT DEFAULT "en",
-                    registro TIMESTAMP,
-                    status INTEGER
-                )
-            `);
-
-			this.db.exec(`
-                CREATE TABLE IF NOT EXISTS musicas (
-                    chat_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    file_id TEXT NOT NULL,
-                    ytb_id TEXT NOT NULL,
-                    downloads INTEGER DEFAULT 0,
-                    metadata TEXT,
-                    thumbnail TEXT, 
-                    registro TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES usuarios(chat_id)
-                )
-            `);
-
-			this.db.exec(`
-                CREATE TABLE IF NOT EXISTS outros (
-                    chat_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    file_id TEXT NOT NULL,
-                    ytb_id TEXT NOT NULL,
-                    formato TEXT,
-                    qualidade TEXT,
-                    downloads INTEGER DEFAULT 0,
-                    metadata TEXT,
-                    registro TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES usuarios(chat_id)
-                )
-            `);
-		})();
+	inline() {
+		this.bot.inlineQuery(async (inlineQuery, ctx) => callCommand('download', ctx, 'inlineMusicSearch', inlineQuery));
 	}
 
 	commands() {
-		this.bot.start(ctx => startCmd(ctx, this.db));
-		this.bot.help(ctx => helpCmd(ctx, this.db));
-		this.bot.command('lang', ctx => langsCmd(ctx, this.db, this.cache));
-		this.bot.command('kill', ctx => killQueueCmd(ctx));
+		this.bot.start(async (ctx) => await callCommand('start', ctx));
+		this.bot.help(async (ctx) => await callCommand('help', ctx));
+		this.bot.command('lang', async (ctx) => await callCommand('lang', ctx, 'getLangs'))
+		this.bot.action(/setlang\s(.+)/, async (ctx) => await callCommand('lang', ctx, 'setLang', ctx.match[1]));
+		this.bot.command(/(?<command>ban|desban)(?:\s+(?<id_telegram>\d+))?/, async (ctx) => await callCommand('admin', ctx, 'banOrUnban'))
+		this.bot.command(/report|relatorio/, async (ctx) => await callCommand('admin', ctx, 'getReport'));
 
-		// Admin
-		this.bot.command('totalusuarios', ctx => getTotalUsuarios(ctx));
-		this.bot.command('totalmusicas', ctx => getTotalMusicas(ctx));
-		this.bot.command(['ban', 'desban'], ctx => banirOuDesbanirUsuario(ctx));
-
-		this.bot.on('text', async (ctx) => {
+		this.bot.hears(specialRegex.youtube, async (ctx) => {
 			const chat_id = ctx.from.id;
-			const text = ctx.message.text.trim();
-			let user = usuario(ctx)
-			const langCode = user.hasOwnProperty('lang') ? user.lang : 'en';
+			const { video_id } = ctx.match.groups;
 
-			const video = new Video();
-			const music = new Audio();
-
-			const extract = video.splitURL(text);
-			const id_video = (extract) ? extract.videoId : null;
-
-			if (id_video === null || id_video === undefined) {
-				let text = lang('invalid_link', langCode)
-				ctx.reply(text, { parse_mode: 'Markdown' });
+			if (!video_id) {
+				ctx.reply(lang('invalid_link', this.lang), { parse_mode: 'Markdown' });
 				return;
 			}
 
-			video.setUrl(text); // Define a URL da midia!
+			const fetchVideo = new YoutubeVideo(video_id);
 
-			await forwardCacheMusica(ctx, id_video, async (ctx) => {
-				await limiteProcessos(ctx, id_video, async () => {
-					await ctx.reply(lang('waiting_for_info', langCode))
-						.then(async (resp) => {
-							this.cache.update(chat_id, 'ultima_msg', resp.message_id);
+			await redisClient.setEx(
+				`DOWNLOADING_LAST_MSG:${chat_id}:${video_id}`,
+				120,
+				(await ctx.reply(lang('waiting_for_info', this.lang), { parse_mode: 'Markdown' })).message_id.toString()
+			);
 
-							let getTipo = await video.getTipo();
-							this.cache.update(chat_id, `download_cache_${id_video}`, getTipo);
+			const videoData = await redisRemember(`VIDEO_DATA:${video_id}`, async () => await fetchVideo.getData(), 900);
 
-							if (getTipo.tipo === 'music') {
-								await baixarMusica(ctx, music, id_video);
-							}
-
-							if (getTipo.tipo === 'video') {
-								if (getTipo.informacoes.duration > 720) { // Video maior que 12min
-									await editOrSendMessage(ctx, null, lang('time_exceeded', langCode, { minute: 12 }));
-									return;
-								}
-
-								await editOrSendMessage(ctx, this.cache.get(chat_id, 'ultima_msg'), lang('waiting_qualities', langCode))
-									.then(id => this.cache.update(chat_id, 'ultima_msg', id));
-
-								await getFormatosButtons(ctx, { video, videoID: id_video });
-
-								return;
-							}
-						})
-				});
-			});
+			switch (videoData.type) {
+				case 'video':
+					await editOrSendMessage(ctx, null, lang('waiting_qualities', this.lang), {}, true, `DOWNLOADING_LAST_MSG:${chat_id}:${video_id}`);
+					await sleep(1500);
+					await callCommand('download', ctx, 'fetchVideoOptions', video_id);
+					break;
+				case 'music':
+					await callCommand('download', ctx, 'musicDownload', video_id);
+					break;
+				default:
+					await ctx.reply(lang('invalid_link', this.lang), { parse_mode: 'Markdown' });
+					break;
+			}
 		});
 
-		this.bot.on('callback_query', async (ctx) => {
-			const data = ctx.callbackQuery.data
-			const params = data.includes(' ') ? data.split(' ') : {};
+		this.bot.action(specialRegex.callback_download, async (ctx) => {
+			const vip = await isUserInGroupOrChannel(ctx);
 
-			if (params[0] == 'setlang') {
-				setLang(ctx, this.db, this.cache, params[1]);
+			if (ctx.match.groups?.vipmode && !vip) {
+				ctx.answerCbQuery(lang('vip_only', this.lang), { show_alert: true });
+				return;
 			}
 
-			if (data === 'download_format') {
-				return await ctx.answerCbQuery();
+			await ctx.answerCbQuery();
+
+			const { video_id } = ctx.match.groups;
+
+			if (!video_id) {
+				ctx.reply(lang('invalid_link', this.lang), { parse_mode: 'Markdown' });
+				return;
 			}
 
-			if (params) {
-				switch (params[0]) {
-					case 'download':
-						await limiteProcessos(ctx, params[1], async () => await baixarMidia(ctx, params));
-						break;
-				}
+			await callCommand('download', ctx, 'mediaDownload', ctx.match.groups);
+		});
+
+		this.bot.action(specialRegex.summarize, async (ctx) => await callCommand('summarize', ctx, 'sendSummarize', ctx.match.groups));
+
+		// Fallback
+		this.bot.drop(async (ctx) => {
+			if (ctx.callbackQuery?.id) {
+				await ctx.answerCbQuery();
+			}
+
+			if (ctx.message?.audio || ctx.message?.video) {
+				ctx.setMessageReaction(ctx.from.id, ctx.message.message_id, "🔥");
+				return;
+			}
+
+			if (updateTypeOrigin(ctx) === 'private' && ctx.message?.text) {
+				ctx.reply(lang('invalid_link', this.lang), { parse_mode: 'Markdown' });
 			}
 		});
 	}
 
 	run(webhook = false) {
+		this.bot.catch(async (error, ctx) => {
+			// Reporta o erro ao admin
+			ctx.telegram.sendMessage(
+				env('CACHE_CHANNEL'),
+				`<b>Error:</b>`
+				+ `<pre><code class="language-text">${error}</code></pre>`
+				+ `<b>User:</b> ${ctx.from?.first_name} (${ctx.from?.id})\n`
+				+ `Typed: ${ctx.message?.text || 'N/A'}`,
+				{ parse_mode: 'HTML' }
+			).catch(err => {
+				// Log caso a tentativa de envio de mensagem falhe
+				Logger.error('Failed to send error report to Telegram:', err.stack || err);
+			});
+		});
+
 		this.middlewares();
+		this.inline();
 		this.commands();
 
 		if (webhook) {
-			//this.bot.telegram.setWebhook(process.env.webhook_url);
-			const status = this.bot.startWebhook('/', null, process.env.webhook_port);
-
-			console.log('Webhook is running!');
-
+			(async () => {
+				const result = await this.bot.telegram.setWebhook(process.env.BOT_WEBHOOK, {
+					drop_pending_updates: process.env.NODE_ENV === 'development' ? true : false,
+				});
+				return result;
+			})().then(async result => {
+				await this.bot.startWebhook('/', null, process.env.BOT_WEBHOOK_PORT);
+				console.info(result ? `\x1b[32m✓ Webhook is running!\x1b[0m` : `\x1b[31m× Error on setWebhook\x1b[0m`);
+			});
 			return;
 		}
 
-		saveLog(`
-#################################
-#                               #
-#       Youtube Music Bot       #
-#                               #
-#################################
-
-Total users: ${this.db.prepare('SELECT * FROM usuarios').all().length}
-Total music's: ${this.db.prepare('SELECT * FROM musicas').all().length}
-
-Bot is running with long polling!\n`);
+		console.info('✅ Bot is running Longpolling!');
 
 		// Longpolling
 		this.bot.launch();

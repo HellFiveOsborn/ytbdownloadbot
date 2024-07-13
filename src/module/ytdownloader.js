@@ -1,24 +1,51 @@
-const { exec, spawn, spawnSync } = require('child_process');
+require('dotenv').config({ path: '../../.env', encoding: 'utf-8', override: true });
+
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const fetch = require('node-fetch');
 const sharp = require('sharp');
-const { resolve_path, sleep } = require('./functions');
+const { resolve_path, Logger, env, formatFilename } = require('./functions');
 
-const util = require('util');
+const ffmpeg = require('./ffmpeg');
 
-const download_path = process.env.download_path;
+const specialRegex = {
+  youtube: /(?:https?:\/\/)?(?:www\.)?youtu(?:\.be\/|be.com\/\S*(?:|v|watch|e|embed|shorts)(?:(?:(?=\/[-a-zA-Z0-9_]{11,}(?!\S))\/)|(?:\S*v=|v\/)))(?<video_id>[-a-zA-Z0-9_]{11,})/,
+  callback_download: /\s(?<video_id>[^\s]+)\s(?<format_id>[^\s]+)\s?(?<audio_id>[^\s]+)?/
+}
 
-const disponiveis = {
+const supported_formats = {
   video: {
-    qualidades: ['144p', '360p', '480p', '720p', '1080p'],
-    formatos: ['mp4', 'mkv']
+    qualities: [
+      '144p', '180p', '256p', '298p', '300p', '360p', '426p', '446p',
+      '450p', '480p', '540p', '594p', '600p', '640p', '720p', '854p',
+      '900p', '1080p', '1920p'
+    ],
+    formats: ['mp4']
   },
   audio: {
-    qualidades: ['128k', '192k', '320k'],
-    formatos: ['mp3', 'm4a']
+    qualities: ['128k', '192k', '320k'],
+    formats: ['mp3', 'm4a']
   },
+};
+
+const bandwidth = {
+  noVip: env('NO_VIP_MAX_BANDWIDTH'),
+  max: env('MAX_BANDWIDTH'),
+}
+
+const randomString = (size, toUppercase = true) => Array.from({ length: size },
+  () => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 52)]).join('')[(toUppercase ? 'toUpperCase' : 'toLowerCase')]();
+
+const splitURL = url => {
+  const match = url.match(specialRegex.youtube);
+  return match ? {
+    videoId: match.groups.video_id,
+    fullUri: match[0],
+    input: match.input,
+    index: match.index,
+    groups: match.groups ?? {}
+  } : null;
 };
 
 /**
@@ -30,10 +57,14 @@ class Model {
     this.path = path.resolve(__dirname, '../..');
     this.data = null;
 
-    // Lista de processos
-    this.ytdlpProcess = null;
-    this.queue = new Map();
-    this.onCompleteCallback = null;
+    this.yt_dlp = null;
+    this.ffmpeg = null;
+
+    this.queue = new Map(); // Lista de processos
+
+    this.onCompleteCallback = this.onErrorCallback = null;
+
+    this.isVip = false;
   }
 
   /**
@@ -52,11 +83,11 @@ class Model {
    * 
    * @return {object|Error}
    */
-  async getData() {
-    if (!this.url) throw new Error('URL não definida.');
+  async getFullData(video_id = null) {
+    if (!this.url && !video_id) throw new Error('URL/ID não definido.');
 
     return new Promise((resolve, reject) => {
-      const process = spawn('yt-dlp', ['--dump-json', this.url]); // Use o URL fornecido como argumento
+      const process = spawn('yt-dlp', ['-J', this.url || video_id]);
 
       let stdout = '';
       let stderr = '';
@@ -70,53 +101,83 @@ class Model {
       });
 
       process.on('close', (code) => {
-        if (code === 0) {
+        code === 0 ? (() => {
           try {
             this.data = JSON.parse(stdout);
             resolve(this.data);
           } catch (error) {
-            reject(error);
+            reject(new Error(`Falha ao analisar o JSON do stdout: ${error.message}`));
           }
-        } else {
-          reject(new Error(`yt-dlp process exited with code ${code}. Error: ${stderr}`));
-        }
+        })() : reject(new Error(`yt-dlp process exited with code ${code}. Error: ${stderr}`));
       });
     });
   }
 
   /**
-   * Retorna o tipo da media 
+   * Retorna dados simplificados do Youtube
    * 
-   * @return {object} Tipo Video ou Audio
-   */
-  async getTipo() {
-    let response = (!this.data) ? await this.getData() : this.data;
+   * @returns {{
+  *   type: string,
+  *   data: {
+  *     title: string,
+  *     upload_date: string,
+  *     thumbnail: string,
+  *     description: string,
+  *     channel: string,
+  *     channel_url: string,
+  *     channel_is_verified: boolean,
+  *     language: string,
+  *     categories: string[],
+  *     duration: number,
+  *     duration_string: string,
+  *     view_count: number,
+  *     tags: string[],
+  *     channel_follower_count: number,
+  *     album?: string,
+  *     artist?: string,
+  *     track?: string,
+  *     release_date?: string,
+  *     release_year?: number
+  *  }
+  * }} Objeto contendo informações de vídeo ou música.
+  */
+  async getData() {
+    const response = this.data || await this.getFullData();
+    const { title, thumbnail, description, channel, channel_url, channel_is_verified, language, categories, duration, duration_string, track, album, artist, release_date, release_year, view_count, tags, upload_date, channel_follower_count, live_status } = response;
 
     let data = {
-      tipo: response.hasOwnProperty('track') ? 'music' : 'video',
-      qualidades: this.getQualities(),
-      informacoes: {
-        title: response.title,
-        thumbnail: response.thumbnail,
-        description: response.description,
-        channel: response.channel,
-        language: response.language,
-        categories: response.categories,
-        duration: response.duration,
-        duration_string: response.duration_string,
-      }
-    }
+      type: track ? 'music' : 'video',
+      data: {
+        title,
+        upload_date,
+        thumbnail,
+        description,
+        channel,
+        channel_url,
+        channel_is_verified: channel_is_verified || false,
+        language,
+        categories,
+        duration,
+        duration_string,
+        view_count,
+        tags,
+        channel_follower_count,
+        live: (live_status === 'is_live' ? true : false),
+        ...(
+          track && {
+            album,
+            artist,
+            track,
+            release_date,
+            release_year,
+          }
+        ),
+      },
+    };
 
-    if (data.tipo === 'music') {
-      data.informacoes = {
-        ...data.informacoes,
-        album: response.album,
-        artist: response.artist,
-        track: response.track,
-        release_date: response.release_date,
-        release_year: response.release_year,
-      };
-      delete data.qualidades;
+    // Adiciona 'qualidades' somente se for um vídeo
+    if (data.type === 'video') {
+      data.qualities = this.getQualities();
     }
 
     return data;
@@ -132,191 +193,154 @@ class Model {
 
     const { formats } = this.data;
 
-    let video_base = null;  // Inicialize a qualidade máxima como nula
-
-    formats.forEach((format) => {
-      if (format.vcodec !== 'none' && format.acodec !== 'none') {
-        // Verifique se a qualidade atual é maior do que a qualidade máxima
-        if (disponiveis.video.qualidades.indexOf(format.format_note) > disponiveis.video.qualidades.indexOf(video_base?.format_note || '144p')) {
-          video_base = format;
-        }
-      }
-    });
-
-    const qualidades = {};
-
-    disponiveis.video.formatos.forEach((formato) => {
-      qualidades[formato] = {
-        qualidades: {},
-        total: 0
-      };
-
-      disponiveis.video.qualidades.forEach((qualidade) => {
-        if (qualidade === video_base.format_note || disponiveis.video.qualidades.indexOf(qualidade) < disponiveis.video.qualidades.indexOf(video_base.format_note)) {
-          qualidades[formato].qualidades[qualidade] = {
-            id: video_base.format_id,
-            opcao: qualidade,
-            vcodec: video_base.vcodec,
-            acodec: video_base.acodec,
-            formato_original: video_base.video_ext,
-            recode: video_base.video_ext !== formato || disponiveis.video.qualidades.indexOf(qualidade) != disponiveis.video.qualidades.indexOf(video_base.format_note)
-          };
-          qualidades[formato].total = qualidades[formato].total + 1
-        }
-      });
-    });
-
-    disponiveis.audio.formatos.forEach((formato) => {
-      qualidades[formato] = {
-        qualidades: {},
-        total: 0
-      }
-
-      disponiveis.audio.qualidades.forEach((qualidade) => {
-        qualidades[formato].qualidades[qualidade] = {
-          id: video_base.format_id,
-          opcao: qualidade,
-          vcodec: video_base.vcodec,
-          acodec: video_base.acodec,
-          formato_original: video_base.video_ext,
-          recode: true // Precisa sim fazer recode, pois e um video, e queremos converter para audio
-        };
-        qualidades[formato].total = qualidades[formato].total + 1
-      });
-    })
-
-    return qualidades;
-  }
-
-  /**
-   * Retorna uma string em maiúscula ou minúscula com base no tamanho especificado.
-   *
-   * @param {integer} size - O tamanho da string desejada.
-   * @param {boolean} [toUppercase=true] - Se true, a string será em maiúscula; caso contrário, em minúscula.
-   *
-   * @return {string} - A string aleatória gerada.
-   */
-  randomString(size, toUppercase = true) {
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-    const characterCount = characters.length;
-    let randomName = '';
-
-    for (let i = 0; i < size; i++) {
-      const randomIndex = Math.floor(Math.random() * characterCount);
-      const randomChar = characters[randomIndex];
-
-      if (toUppercase) {
-        randomName += randomChar.toUpperCase();
-      } else {
-        randomName += randomChar;
-      }
+    const formatSize = (size) => {
+      if (size === undefined) return 'Desconhecido';
+      const i = size === 0 ? 0 : Math.floor(Math.log(size) / Math.log(1024));
+      return `${(size / Math.pow(1024, i)).toFixed(2) * 1} ${['B', 'KB', 'MB', 'GB', 'TB'][i]}`;
     }
 
-    return randomName;
-  }
+    // Filtra e ordena os formatos de vídeo webm sem áudio
+    let videoFormats = formats
+      .filter(f => f.ext === 'webm' && f.acodec === 'none' && supported_formats.video.qualities.includes(`${f.height}p`))
+      .reduce((acc, current) => {
+        const { height } = current;
+        if (height && !acc.some(item => item.height === height)) {
+          acc.push(current);
+        }
+        return acc;
+      }, [])
+      .sort((a, b) => b.height - a.height) // Ordena pela maior qualidade
+      .map(({ format_id, height, filesize }, index) => ({
+        formatId: format_id,
+        quality: `${height}p`,
+        fileSize: formatSize(filesize),
+        best: index === 0 // Marca a melhor qualidade
+      }));
 
-  /**
-   * Retorna o nome do arquivo formatado, sem caracteres especiais.
-   * 
-   * @param {string} name 
-   * @return {string}
-   */
-  fileNameReplace(name) {
-    return name.replace(/[/\\?%*:|"<> ]/g, '-');
-  }
-
-  /**
-   * Extraia o video ID
-   * 
-   * @param {string} url 
-   * @returns {object} Objeto
-   */
-  splitURL(url) {
-    const data = url.match(/(?:https?:\/\/)?(?:www\.)?youtu(?:\.be\/|be.com\/\S*(?:|v|watch|e|embed|shorts)(?:(?:(?=\/[-a-zA-Z0-9_]{11,}(?!\S))\/)|(?:\S*v=|v\/)))(?<video_id>[-a-zA-Z0-9_]{11,})/);
-
-    if (data) {
-      return {
-        videoId: data[1],
-        full_uri: data[0],
-        input: data.input,
-        index: data.index,
-        groups: data.groups ?? [],
-      };
-    } else {
-      return null; // Retorna null se a regex não encontrar uma correspondência
+    // Se não encontrar vídeos webm, busca o melhor formato mp4 com áudio
+    if (!videoFormats.length) {
+      videoFormats = formats
+        .filter(f => f.ext === 'mp4' && f.acodec !== 'none' && supported_formats.video.qualities.includes(`${f.height}p`))
+        .reduce((acc, current) => {
+          const { height } = current;
+          if (height && !acc.some(item => item.height === height)) {
+            acc.push(current);
+          }
+          return acc;
+        }, [])
+        .sort((a, b) => b.height - a.height)
+        .map(({ format_id, height, filesize, filesize_approx }, index) => ({
+          formatId: format_id,
+          quality: `${height}p`,
+          fileSize: formatSize(filesize || filesize_approx),
+          best: index === 0
+        }));
     }
+
+    if (!videoFormats.length) {
+      console.log(`\nNão foram encontradas Qualidades do video ${this.data.videoId}`);
+    }
+
+    // Encontra e formata o áudio de melhor qualidade
+    let audioFormat = formats
+      .filter(f => supported_formats.audio.formats.includes(f.ext) && f.acodec !== 'none' && f.vcodec === 'none')
+      .map(f => {
+        const approximateBitrate = supported_formats.audio.qualities.reduce((closest, quality) => {
+          const qualityBitrate = parseInt(quality);
+          return Math.abs(qualityBitrate - f.abr) < Math.abs(closest - f.abr) ? qualityBitrate : closest;
+        }, Infinity);
+        return { ...f, abr: approximateBitrate + 'k' };
+      })
+      .filter(f => supported_formats.audio.qualities.includes(f.abr))
+      .reduce((best, current) => (best.bitrate > current.bitrate ? best : current), { bitrate: 0 });
+
+    return {
+      videoFormats,
+      audioFormat: audioFormat ? {
+        formatId: audioFormat.format_id,
+        quality: `${audioFormat.abr}`,
+        fileSize: formatSize(audioFormat.filesize),
+        best: true
+      } : null
+    };
   }
 
   /**
    * Efetua o download e conversão no formato.
    * 
    * @param {string|NULL} video_id ID do video
-   * @param {string} formato_original Formato original do video.
-   * @param {string} formato Formato (MP4/MKV/MP3...)
-   * @param {string} qualidade Qualidade (360p/480p/720p/|128/192/360)
+   * @param {Array} formats Formatos de qualidade
    * @param {string|NULL} id_qualidade ID da qualidade
-   * @param {boolean} recode Recodificar o video.
    */
-  download_convert(video_id = null, formato_original, formato, qualidade, id_qualidade = null, recode = false, isVip = false) {
-    if (!qualidade || !formato) throw new Error('Você deve especificar o ID da qualidade e o formato para o download.');
-
-    if (!video_id) {
-      if (!this.url) {
-        throw new Error('ID ou URL do video não definida.');
-      }
+  downloadVideo(videoId = null, formats = [], isVip = false) {
+    if (!videoId && !this.url) {
+      throw new Error('ID ou URL do video não definida.');
     }
 
-    // Verifica se o formato não está em "video" nem em "audio"
-    if (!disponiveis.video.formatos.includes(formato) && !disponiveis.audio.formatos.includes(formato)) {
-      throw new Error(`O formato ${formato} não está disponível para vídeo nem para áudio.`)
-    }
+    let source = videoId ? `https://www.youtube.com/watch?v=${videoId}` : this.url;
+    let folder_download = path.join(resolve_path(process.env.OUTPUT_DIR), randomString(12));
+    let file_name = '%(title)s.%(ext)s';
+    this.isVip = isVip;
 
-    const random = this.randomString(12);
-    const source = `https://www.youtube.com/watch?v=${video_id}` ?? this.url;
-    const pasta = path.join(resolve_path(download_path), random);
-    const nome_arquivo = `${pasta}/${random}.%(ext)s`;
+    let args = ['-v', '-q', '--progress', '-o', path.join(folder_download, file_name)];
+    const bandwidthValue = !isVip ? bandwidth.noVip : bandwidth.max;
+    args.push('-r', bandwidthValue);
 
-    const argumentos = [
-      '-q', '--progress', // Mostrar somente o progresso
-    ];
+    args = (formats.filter(i => i != null).length > 1) ?
+      ['-f', formats.join('+'), ...args] :
+      ['-f', ...formats, ...args]
 
-    if (!isVip) {
-      argumentos.push('-r', '250k') // Limita o download a 250kbps
-    }
+    args.push(source);
 
-    argumentos.push('-o', nome_arquivo, source);
+    this.yt_dlp = spawn('yt-dlp', args.filter(arg => arg != null));
+    this.queue.set(`YTDLP:${this.yt_dlp.pid}`, this.yt_dlp);
 
-    if (id_qualidade) {
-      argumentos.unshift('-f', id_qualidade);
-    }
+    let error = '';
+    this.yt_dlp.stderr.on('data', (data) => error += data.toString());
 
-    this.ytdlpProcess = spawn('yt-dlp', argumentos);
-    this.queue.set(`ytdlp_processo_${this.ytdlpProcess.pid}`, this.ytdlpProcess); // Salve o ID do processo
-
-    this.ytdlpProcess.stderr.on('data', (data) => console.log(data.toString()));
-
-    // Adicione um ouvinte para o evento 'close' do processo
-    this.ytdlpProcess.on('close', (code) => {
-      this.queue.delete(this.ytdlpProcess.pid); // Remova o processo do mapa após a conclusão
+    this.yt_dlp.on('close', (code) => {
+      this.queue.delete(`YTDLP:${this.yt_dlp.pid}`); // Remova o processo do mapa após a conclusão.
 
       if (code === 0) {
-        if (this.onCompleteCallback) {
-          this.onCompleteCallback({
-            pasta,
-            arquivo: nome_arquivo.replace('%(ext)s', formato_original),
-            nome: random,
-            recode
-          });
-        }
+        fs.readdir(folder_download, async (err, files) => {
+          if (err) {
+            Logger.save({ message: 'Erro ao listar arquivos do diretório de download', error: err })
+            return;
+          }
+          let downloadedFile = files.find(file => path.extname(file) !== '');
+
+          if (downloadedFile) {
+            let fullPath = path.join(folder_download, downloadedFile);
+            const ffmpegClass = this.convert(fullPath);
+
+            ffmpegClass.getMediaType((data) => {
+              ffmpegClass.isVip = this.isVip;
+              ffmpegClass.start();
+              ffmpegClass.progress((data) => this.yt_dlp.emit('converting', data));
+              ffmpegClass.onComplete((data) => this.onCompleteCallback(data));
+              ffmpegClass.onError((data) => this.onErrorCallback(data));
+            });
+          }
+        });
       } else {
-        // Trate o erro se o processo YT-dlp terminar com código diferente de 0
-        console.error(`YT-dlp process exited with code ${code}`);
+        this.onErrorCallback({
+          error: true,
+          message: `Erro ao baixar o video: Exit code ${code}`,
+          processId: this.yt_dlp.pid,
+          context: error
+        });
       }
     });
 
-    this.processo_id = this.ytdlpProcess.pid;
+    this.processId = this.yt_dlp.pid;
 
     return this;
+  }
+
+  convert(source) {
+    this.ffmpeg = new ffmpeg(source);
+    
+    return this.ffmpeg;
   }
 
   /**
@@ -325,77 +349,94 @@ class Model {
    * @param {int} video_id 
    * @returns 
    */
-  download_track(video_id = null, isVip = false) {
-    if (!video_id) {
-      if (!this.url) {
-        throw new Error('ID ou URL do video não definida.');
-      }
+  async downloadMusic(videoId = null, isVip = false) {
+    if (!videoId && !this.url) {
+      throw new Error('ID ou URL do video não definida.');
     }
 
-    const random = this.randomString(12);
-    const source = video_id ?? this.url;
-    const pasta = path.join(resolve_path(download_path), random);
-    const nome_arquivo = `${pasta}/${random}.mp3`;
+    const fetchMusic = await this.getData();
 
-    const thumbnail = path.join(pasta, `${random}.jpg`);
+    let source = videoId ? `https://music.youtube.com/watch?v=${videoId}` : this.url;
+    let folder_download = path.join(resolve_path(process.env.OUTPUT_DIR), randomString(12));
+    let file_name = `${formatFilename(fetchMusic.data.track)}.mp3`;
+    let thumbnail = path.join(folder_download, `capa.jpg`);
 
-    const argumentos = [
-      '-q', '--progress', // Mostrar somente o progresso
-    ]
+    const args = ['-q', '--progress', '-x', '--audio-format', 'mp3', '-o', path.join(folder_download, file_name)];
 
     if (!isVip) {
-      argumentos.push('-r', '250k') // Limita o download a 250kbps
+      args.push('-r', bandwidth.noVip)
+    } else {
+      args.push('-r', bandwidth.max);
     }
 
-    const resto = [
-      '-x', '--audio-format',
-      'mp3',
-      '-o', nome_arquivo,
-      source
-    ];
+    args.push(source);
 
-    argumentos.push(...resto);
+    this.yt_dlp = spawn('yt-dlp', args.filter(arg => arg != null));
+    this.queue.set(`YTDLP:${this.yt_dlp.pid}`, this.yt_dlp);
 
-    this.ytdlpProcess = spawn('yt-dlp', argumentos);
-    this.queue.set(`ytdlp_processo_${this.ytdlpProcess.pid}`, this.ytdlpProcess); // Salve o ID do processo
+    let error = '';
+    this.yt_dlp.stderr.on('data', (data) => error += data.toString());
 
-    this.getTipo()
-      .then((resp) => {
-        // Adicione um ouvinte para o evento 'close' do processo
-        this.ytdlpProcess.on('close', async (code) => {
-          this.queue.delete(this.ytdlpProcess.pid); // Remova o processo do mapa após a conclusão
+    this.yt_dlp.on('close', async (code) => {
+      this.queue.delete(this.yt_dlp.pid); // Remova o processo do mapa após a conclusão
 
-          // Cria a capa da musica.
-          const res = await fetch(resp.informacoes.thumbnail);
-          const buffer = await res.buffer();
-          const img = sharp(buffer, { failOnError: false });
-          await img.resize(250, 250)
-            .toFormat('jpeg')
-            .toFile(thumbnail, (err, info) => {
-              if (err) {
-                console.error(err);
-                return;
-              }
-            });
-
-          if (code === 0) {
-            if (this.onCompleteCallback) {
-              this.onCompleteCallback({
-                ...resp.informacoes,
-                song_path: nome_arquivo,
-                capa: thumbnail,
-                path: pasta
-              });
-            }
-          } else {
-            // Trate o erro se o processo YT-dlp terminar com código diferente de 0
-            console.error(`YT-dlp process exited with code ${code}`);
+      // Cria a capa da musica.
+      const res = await fetch(fetchMusic.data.thumbnail);
+      const buffer = await res.buffer();
+      const img = sharp(buffer, { failOnError: false });
+      await img.resize(320, 320)
+        .toFormat('jpeg', { quality: 70 })
+        .toFile(thumbnail, (err, info) => {
+          if (err) {
+            Logger.error({ message: 'Erro ao salvar a capa da musica', error: err })
+            return;
           }
         });
 
-      });
+      if (code === 0) {
+        fs.readdir(folder_download, async (err, files) => {
+          if (err) {
+            Logger.save({ message: 'Erro ao listar arquivos do diretório de download', error: err })
+            return;
+          }
+          let downloadedFile = files.find(file => path.extname(file) !== '');
+          if (downloadedFile) {
+            let fullPath = path.join(folder_download, downloadedFile);
 
-    this.processo_id = this.ytdlpProcess.pid;
+            if (thumbnail) {
+              const tempPath = path.join(folder_download, `temp_${downloadedFile}`);
+              const ffmpeg = await spawn('ffmpeg', ['-i', fullPath, '-i', thumbnail, '-map', '0:0', '-map', '1:0', '-c', 'copy', '-id3v2_version', '3', tempPath]);
+
+              ffmpeg.on('close', (code) => {
+                code === 0 ?
+                  fs.rename(tempPath, fullPath, (err) => {
+                    err ? Logger.save({ message: 'Erro ao substituir arquivo', error: err }, 'error') : '';
+                  }) : Logger.save(`FFmpeg falhou com código ${code}`, 'error')
+              });
+            }
+
+            this.onCompleteCallback({
+              file_name,
+              source: fullPath,
+              thumbnail,
+              folder_download,
+              size: fs.statSync(fullPath).size,
+              createdAt: fs.statSync(fullPath).mtime,
+              extra: fetchMusic.data
+            });
+          }
+        })
+      } else {
+        this.onErrorCallback({
+          error: true,
+          message: `Erro ao baixar o musica: Exit code ${code}`,
+          processId: this.yt_dlp.pid,
+          context: error
+        });
+      }
+    });
+
+    this.processId = this.yt_dlp.pid;
 
     return this;
   }
@@ -407,8 +448,8 @@ class Model {
    * @returns {Model} - Retorna a instância atual para vinculação em cascata.
    */
   progress(callback) {
-    if (this.ytdlpProcess !== null && !this.ytdlpProcess.killed) {
-      this.ytdlpProcess.stdout.on('data', async (data) => {
+    if (this.yt_dlp !== null && !this.yt_dlp.killed) {
+      this.yt_dlp.stdout.on('data', async (data) => {
         const output = data.toString('utf-8');
 
         // Verifique se a linha contém informações sobre o progresso
@@ -422,23 +463,28 @@ class Model {
             const baixado = match[1];
             const velocidade = match[2];
 
-            await sleep(1000);
-
             if (callback) {
-              callback({ porcentagem, baixado, velocidade });
+              callback({ porcentagem, baixado, velocidade, converting: false });
             } else {
-              return { porcentagem, baixado, velocidade }
+              return { porcentagem, baixado, velocidade, converting: false }
             }
           }
         }
       });
 
       // Quando a conversão estiver concluída ou o processo for encerrado
-      this.ytdlpProcess.on('close', () => {
-        this.ytdlpProcess.stderr.removeAllListeners('data'); // Remove todos os ouvintes de 'data'
+      this.yt_dlp.on('close', () => {
+        this.yt_dlp.stderr.removeAllListeners('data'); // Remove todos os ouvintes de 'data'
       });
     }
 
+    this.yt_dlp.on('converting', async ({ porcentagem, baixado, velocidade, converting }) => {
+      if (callback) {
+        callback({ porcentagem, baixado, velocidade, converting: true });
+      } else {
+        return { porcentagem, baixado, velocidade, converting: true }
+      }
+    });
     return this;
   }
 
@@ -452,18 +498,34 @@ class Model {
     this.onCompleteCallback = callback;
     return this;
   }
+
+  onError(callback) {
+    this.onErrorCallback = callback;
+    return this;
+  }
 }
 
 /**
  * Class para tratamento de Audio
+* @extends {Model}
  */
-class Audio extends Model {
-  constructor() {
+class YoutubeAudio extends Model {
+  constructor(video_id = null) {
     super();
+
+    if (video_id) {
+      super.setUrl(`https://music.youtube.com/watch?v=${video_id}`);
+    }
   }
 
-  downloadMusic(video_id, isVip = false) {
-    return super.download_track(video_id, isVip);
+  getData() {
+    return super.getData();
+  }
+
+  async downloadMusic(video_id, isVip = false) {
+    const download = super.downloadMusic(video_id, isVip);
+
+    return download;
   }
 
   progress(callback) {
@@ -479,13 +541,23 @@ class Audio extends Model {
  * Class para tratamento de Video
  * @extends {Model}
  */
-class Video extends Model {
-  constructor() {
+class YoutubeVideo extends Model {
+  constructor(video_id = null) {
     super();
+
+    if (video_id) {
+      super.setUrl(`https://www.youtube.com/watch?v=${video_id}`);
+    }
   }
 
-  download_convert(video_id = null, formato_original, formato, qualidade, id_qualidade, recode, isVip = false) {
-    return super.download_convert(video_id, formato_original, formato, qualidade, id_qualidade, recode, isVip);
+  getData() {
+    return super.getData();
+  }
+
+  async downloadVideo(videoId, formatId, audioId, isVip = false) {
+    const download = super.downloadVideo(videoId, [formatId, audioId], isVip);
+
+    return download;
   }
 
   progress(callback) {
@@ -497,4 +569,4 @@ class Video extends Model {
   }
 }
 
-module.exports = { Audio, Video };
+module.exports = { YoutubeAudio, YoutubeVideo };
