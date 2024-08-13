@@ -4,26 +4,21 @@ FROM node:22
 # Set the working directory in the container
 WORKDIR /usr/src/app
 
-# Install software-properties-common to add repositories
+# Install necessary packages and dependencies in a single layer
 RUN apt-get update && \
-    apt-get install -y software-properties-common
-
-# Update package lists again after adding repository
-RUN apt-get update
-
-# Install bash and other necessary packages
-RUN apt-get install -y python3 && \
-    apt-get install -y python3-pip && \
-    apt-get install -y screen && \
-    apt-get install -y bash && \
-    apt-get install -y ffmpeg && \
-    apt-get install -y jq && \
-    apt-get install -y curl && \
-    apt-get install -y wget && \
-    apt-get install -y redis-server
-
-# Install yt-dlp using curl
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    apt-get install -y \
+    software-properties-common \
+    python3 \
+    python3-pip \
+    screen \
+    bash \
+    ffmpeg \
+    jq \
+    curl \
+    wget \
+    redis-server && \
+    # Install yt-dlp using curl
+    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp
 
 # Define environment variable
@@ -38,6 +33,11 @@ RUN npm install
 # Make port available to the world outside this container
 EXPOSE 3002
 
-# Start Redis server and then your application
-ENTRYPOINT ["sh", "-c", "service redis-server start && npm run start"]
+# Create setup.sh script to start Redis and the application
+RUN echo '#!/bin/sh\n\
+service redis-server start\n\
+npm run start' > /usr/src/app/setup.sh && \
+    chmod +x /usr/src/app/setup.sh
 
+# Use setup.sh as the entrypoint
+ENTRYPOINT ["/usr/src/app/setup.sh"]
