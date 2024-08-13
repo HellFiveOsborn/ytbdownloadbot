@@ -39,5 +39,5 @@ RUN npm install
 EXPOSE 3002
 
 # Start Redis server and then your application
-ENTRYPOINT ["sh", "-c", "service redis-server start && node --trace-deprecation app.js"]
+ENTRYPOINT ["sh", "-c", "service redis-server start && npm run start"]
 
