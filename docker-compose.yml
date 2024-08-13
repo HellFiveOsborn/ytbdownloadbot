@@ -1,26 +1,18 @@
-version: '3.8'
+version: '3'
+
+networks:
+  dokploy-network:
+    external: true
 
 services:
-  nodeapp:
-    container_name: ytdownloadbot_node
+  youtubemusicbetabot:
     build:
       context: .
       dockerfile: Dockerfile
     volumes:
       - .:/usr/src/app
-    depends_on:
-      - redis
-    networks:
-      - ytdownloadbot-network
     ports:
-      - "3900:3900"
-
-  redis:
-    container_name: ytdownloadbot_redis
-    image: redis:alpine
+      - "3002:3002"
     networks:
-      - ytdownloadbot-network
-
-networks:
-  ytdownloadbot-network:
-    driver: bridge
+      - dokploy-network
+    restart: unless-stopped

@@ -48,6 +48,8 @@ const splitURL = url => {
   } : null;
 };
 
+const YT5s = require('./yt5s');
+
 /**
  * Class Base
  */
@@ -78,6 +80,128 @@ class Model {
     return this;
   }
 
+  durationToSeconds(duration) {
+    const parts = duration.split(':');
+    const hours = parseInt(parts[0], 10);
+    const minutes = parseInt(parts[1], 10);
+    const seconds = parseInt(parts[2], 10);
+    return (hours * 3600) + (minutes * 60) + seconds;
+  }
+
+  convertViewCount(viewCount) {
+    let number = viewCount.replace(/,/g, '.'); // Substitui vírgulas por pontos para facilitar a conversão
+    let multiplier = 1;
+
+    if (number.includes('B')) {
+      multiplier = 1e9;
+      number = number.replace('B', '');
+    } else if (number.includes('Mi')) {
+      multiplier = 1e6;
+      number = number.replace('Mi', '');
+    } else if (number.includes('Mil')) {
+      multiplier = 1e3;
+      number = number.replace('Mil', '');
+    }
+
+    return Math.round(parseFloat(number) * multiplier);
+  }
+
+  parseSize(size) {
+    if (!size) {
+      return null;  // Ou qualquer valor padrão que faça sentido no seu contexto
+    }
+
+    let sizeInMB;
+    if (size.includes('MB')) {
+      sizeInMB = parseFloat(size.replace(' MB', ''));
+    } else if (size.includes('GB')) {
+      sizeInMB = parseFloat(size.replace(' GB', '')) * 1024;
+    } else if (size.includes('KB')) {
+      sizeInMB = parseFloat(size.replace(' KB', '')) / 1024;
+    } else {
+      throw new Error('Unrecognized size format');
+    }
+    return Math.round(sizeInMB * 1024 * 1024);
+  }
+
+  async ytExtractTemp(url) {
+    const yt5Class = new YT5s(url);
+    const ytdata = await yt5Class.getVideoData();
+    const links = await yt5Class.getQualities();
+    if (!links.hasOwnProperty('token') || !links.links) {
+      throw new Error(links.mess || 'Unknow error on getting video qualities!');
+      return;
+    }
+    this.data = {
+      type: ytdata[0].uploader.includes('Topic') ? 'music' : 'video',
+      title: ytdata[0].title,
+      upload_date: ytdata[0].uploaddate.split('.').reverse().join(''),
+      thumbnail: ytdata[0].thumbnail,
+      description: 'No description...',
+      channel: ytdata[0].uploader.replace(' - Topic', ''),
+      channel_url: 'https://yt.be/HellFiveOsborn',
+      channel_is_verified: false,
+      language: 'en',
+      categories: [],
+      duration: this.durationToSeconds(ytdata[0].duration),
+      duration_string: ytdata[0].duration.startsWith('00:') ? ytdata[0].duration.slice(3) : ytdata[0].duration,
+      view_count: this.convertViewCount(ytdata[0].viewcount),
+      tags: [],
+      channel_follower_count: 0,
+      live_status: false,
+      track: ytdata[0].uploader.includes('Topic') ? ytdata[0].title : false,
+      album: '',
+      artist: ytdata[0].uploader.replace(' - Topic', ''),
+      release_date: '',
+      release_year: 0,
+      formats: Object.keys(links).flatMap(formatType => {
+        return Object.keys(links[formatType] || {}).flatMap(key => {
+          const formatKeys = links[formatType][key] || {};
+          return Object.values(formatKeys).map(format => {
+            const height = format.k ? parseInt(format.k.replace('p', ''), 10) : null;
+            return {
+              "asr": null,
+              "filesize": this.parseSize(format.size),
+              "format_id": `${key}@${format.k}`,
+              "format_note": format.q,
+              "source_preference": null,
+              "fps": 30,
+              "audio_channels": null,
+              "height": height,
+              "quality": null,
+              "has_drm": false,
+              "tbr": null,
+              "filesize_approx": null,
+              "url": null,
+              "width": null,
+              "preference": null,
+              "ext": format.f,
+              "vcodec": format.f == 'mp3' || format.f == 'ogg' ? "none" : "true",
+              "acodec": "true",
+              "dynamic_range": null,
+              "container": format.f ? `${format.f}_dash` : null,
+              "resolution": format.f == 'mp3' ? "audio only" : format.k || null,
+              "aspect_ratio": null,
+              "video_ext": format.f == 'mp3' || format.f == 'ogg' ? "none" : format.f,
+              "audio_ext": format.f == 'mp3' || format.f == 'ogg' ? format.f : "none",
+              "abr": parseInt(format.f == 'mp3' || format.f == 'ogg' ? format.k : 0),
+              "vbr": 0,
+              "format": `${key} - ${format.k} (${format.q})`
+            };
+          }).filter(item =>
+            item.filesize !== null &&
+            item.format_note !== undefined &&
+            item.height !== null &&
+            item.ext !== undefined &&
+            item.container !== null &&
+            item.resolution !== null &&
+            item.video_ext !== undefined
+          );
+        });
+      })
+    }
+  }
+
   /**
    * Retorna dados da media do Youtube
    * 
@@ -89,26 +213,29 @@ class Model {
     return new Promise((resolve, reject) => {
       const process = spawn('yt-dlp', ['-J', this.url || video_id]);
 
-      let stdout = '';
-      let stderr = '';
+      let stdout, stderr = '';
 
-      process.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
+      process.stdout.on('data', (data) => stdout += data.toString());
+      process.stderr.on('data', (data) => stderr += data.toString());
 
-      process.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      process.on('close', (code) => {
-        code === 0 ? (() => {
+      process.on('close', async (code) => {
+        if (!stderr.includes('ERROR:')) {
+          code === 0 ? (() => {
+            try {
+              this.data = JSON.parse(stdout);
+              resolve(this.data);
+            } catch (error) {
+              reject(new Error(`Falha ao analisar o JSON do stdout: ${error.message}`));
+            }
+          })() : reject(new Error(`yt-dlp process exited with code ${code}.`, stderr));
+        } else {
           try {
-            this.data = JSON.parse(stdout);
+            await this.ytExtractTemp(video_id ? `https://www.youtube.com/watch?v=${video_id}` : this.url);
             resolve(this.data);
           } catch (error) {
-            reject(new Error(`Falha ao analisar o JSON do stdout: ${error.message}`));
+            reject(new Error(error));
           }
-        })() : reject(new Error(`yt-dlp process exited with code ${code}. Error: ${stderr}`));
+        }
       });
     });
   }
@@ -179,6 +306,11 @@ class Model {
     if (data.type === 'video') {
       data.qualities = this.getQualities();
     }
+
+    // fs.writeFileSync('test.json', JSON.stringify({
+    //   cache: data,
+    //   formatos: this.data.formats
+    // }, null, 2));
 
     return data;
   }
@@ -292,7 +424,7 @@ class Model {
 
     args.push(source);
 
-    this.yt_dlp = spawn('yt-dlp', args.filter(arg => arg != null));
+    this.yt_dlp = spawn('yt-dlp', ['--cookies', path.join(this.path, 'conexaossh.txt'), ...args.filter(arg => arg != null)]);
     this.queue.set(`YTDLP:${this.yt_dlp.pid}`, this.yt_dlp);
 
     let error = '';
@@ -339,7 +471,7 @@ class Model {
 
   convert(source) {
     this.ffmpeg = new ffmpeg(source);
-    
+
     return this.ffmpeg;
   }
 
@@ -358,7 +490,7 @@ class Model {
 
     let source = videoId ? `https://music.youtube.com/watch?v=${videoId}` : this.url;
     let folder_download = path.join(resolve_path(process.env.OUTPUT_DIR), randomString(12));
-    let file_name = `${formatFilename(fetchMusic.data.track)}.mp3`;
+    let file_name = `${formatFilename(fetchMusic?.data?.track)}.mp3`;
     let thumbnail = path.join(folder_download, `capa.jpg`);
 
     const args = ['-q', '--progress', '-x', '--audio-format', 'mp3', '-o', path.join(folder_download, file_name)];
@@ -371,7 +503,7 @@ class Model {
 
     args.push(source);
 
-    this.yt_dlp = spawn('yt-dlp', args.filter(arg => arg != null));
+    this.yt_dlp = spawn('yt-dlp', ['--cookies', path.join(this.path, 'conexaossh.txt'), ...args.filter(arg => arg != null)]);
     this.queue.set(`YTDLP:${this.yt_dlp.pid}`, this.yt_dlp);
 
     let error = '';

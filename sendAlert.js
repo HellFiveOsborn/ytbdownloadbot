@@ -1,6 +1,7 @@
 require('dotenv').config();
 const redisClient = require('./src/module/redisClient');
 const sequelize = require('./database/connection');
+const { Op } = require('sequelize');
 const { User } = require('./models');
 const { Telegraf } = require('telegraf');
 
@@ -13,242 +14,146 @@ class sendAlert {
         // Mensagens de alerta em diferentes idiomas
         const alert_messages = {
             'pt-br': {
-                message: "<b>🐹 Hamster Kombat: O game mais hypado do Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Junte-se agora</a> e torne-se o CEO de uma criptoexchange! 🚀\n\n"
-                    + "<b>🎁 Bônus Exclusivos:</b>\n"
-                    + "- 🪙 <b>5.000 Moedas</b> de boas-vindas.\n"
-                    + "- 🔥 <b>25.000 Moedas</b> para usuários Telegram Premium.\n\n"
-                    + "<b>🌟 Dica de Mestre:</b>\n"
-                    + "- <b>Foque em upgrades de cartas especiais e combos</b> para aumentar seu lucro por hora. 📈\n"
-                    + "- <b>Monitore diariamente as novas cartas</b> e otimize suas estratégias. 🎴\n\n"
-                    + "<b>💡 Lembre-se:</b>\n"
-                    + "- <b>Aumentar o lucro por hora</b> é crucial. 💰\n"
-                    + "- <b>Combine e otimize suas cartas</b> para maximizar ganhos. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Comece agora</a> e domine o Hamster Kombat! 🎮🚀",
+                message: '📢 <b>Aviso Importante</b>\n\n'
+                    + 'Nosso bot está <b>parcialmente online</b> novamente! 🎉\n\n'
+                    + '<blockquote>⚠️ O YouTube está bloqueando muitos bots/sites de download de vídeos, então você ainda pode encontrar erros de upload. Tente novamente em alguns minutos ou busque o vídeo/música em outro canal. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Entre no nosso canal</b> para informações importantes sobre o bot! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Começar a jogar', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Bot automático', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Compartilhe', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Baixe%20vídeos/músicas%20com%20o%20Youtube%20Music%20Bot' }],
+                        [{ text: '🎪 Canal @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'en': {
-                message: "<b>🐹 Hamster Kombat: The most hyped game on Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Join now</a> and become the CEO of a cryptoexchange! 🚀\n\n"
-                    + "<b>🎁 Exclusive Bonuses:</b>\n"
-                    + "- 🪙 <b>5,000 Coins</b> as a welcome gift.\n"
-                    + "- 🔥 <b>25,000 Coins</b> for Telegram Premium users.\n\n"
-                    + "<b>🌟 Master Tip:</b>\n"
-                    + "- <b>Focus on upgrades of special cards and combos</b> to increase your hourly profit. 📈\n"
-                    + "- <b>Monitor new cards daily</b> and optimize your strategies. 🎴\n\n"
-                    + "<b>💡 Remember:</b>\n"
-                    + "- <b>Increasing hourly profit</b> is crucial. 💰\n"
-                    + "- <b>Combine and optimize your cards</b> to maximize gains. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Start now</a> and master Hamster Kombat! 🎮🚀",
+                message: '📢 <b>Important Notice</b>\n\n'
+                    + 'Our bot is <b>partially online</b> again! 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube is blocking many bot/video download sites, so you may still encounter upload errors. Try again in a few minutes or look for the video/music on another channel. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Join our channel</b> for important information about the bot! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Start Playing', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Automatic Bot', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Share', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Download%20videos/music%20with%20the%20Youtube%20Music%20Bot' }],
+                        [{ text: '🎪 Channel @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'es': {
-                message: "<b>🐹 Hamster Kombat: ¡El juego más emocionante de Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Únete ahora</a> y conviértete en el CEO de una criptoexchange! 🚀\n\n"
-                    + "<b>🎁 Bonificaciones Exclusivas:</b>\n"
-                    + "- 🪙 <b>5.000 Monedas</b> como bienvenida.\n"
-                    + "- 🔥 <b>25.000 Monedas</b> para usuarios de Telegram Premium.\n\n"
-                    + "<b>🌟 Consejo de Maestro:</b>\n"
-                    + "- <b>Enfócate en mejoras de cartas especiales y combos</b> para aumentar tu beneficio por hora. 📈\n"
-                    + "- <b>Monitorea diariamente las nuevas cartas</b> y optimiza tus estrategias. 🎴\n\n"
-                    + "<b>💡 Recuerda:</b>\n"
-                    + "- <b>Aumentar el beneficio por hora</b> es crucial. 💰\n"
-                    + "- <b>Combina y optimiza tus cartas</b> para maximizar las ganancias. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Comienza ahora</a> y domina Hamster Kombat! 🎮🚀",
+                message: '📢 <b>Aviso Importante</b>\n\n'
+                    + '¡Nuestro bot está <b>parcialmente en línea</b> nuevamente! 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube está bloqueando muchos bots/sitios de descarga de videos, por lo que aún puede encontrar errores de carga. Inténtelo de nuevo en unos minutos o busque el video/música en otro canal. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Únase a nuestro canal</b> para obtener información importante sobre el bot! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Empezar a jugar', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Bot automático', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Compartir', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Descarga%20videos/música%20con%20el%20Youtube%20Music%20Bot' }],
+                        [{ text: '🎪 Canal @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'zh-hant': {
-                message: "<b>🐹 Hamster Kombat: Telegram 上最熱門的遊戲！🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">立即加入</a> 並成為加密貨幣交易所的CEO！🚀\n\n"
-                    + "<b>🎁 獨家獎金：</b>\n"
-                    + "- 🪙 <b>5,000 枚硬幣</b> 作為歡迎禮。\n"
-                    + "- 🔥 <b>25,000 枚硬幣</b> 給 Telegram Premium 用戶。\n\n"
-                    + "<b>🌟 大師提示：</b>\n"
-                    + "- <b>專注於特殊卡片和組合的升級</b> 以增加每小時的利潤。📈\n"
-                    + "- <b>每天監控新卡片</b> 並優化您的策略。🎴\n\n"
-                    + "<b>💡 記住：</b>\n"
-                    + "- <b>增加每小時的利潤</b> 是關鍵。💰\n"
-                    + "- <b>結合並優化您的卡片</b> 以最大化收益。🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">現在開始</a> 並掌握 Hamster Kombat！🎮🚀",
+                message: '📢 <b>重要通知</b>\n\n'
+                    + '我們的機器人已經<b>部分上線</b>了！ 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube正在封鎖許多機器人/視頻下載網站，因此您可能仍會遇到上傳錯誤。請在幾分鐘後重試或在其他頻道尋找視頻/音樂。 🎵</blockquote>\n\n'
+                    + '🐺 <b>加入我們的頻道</b>以獲取有關機器人的重要信息！ 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 開始遊戲', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: '自動機器人', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ 分享', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20使用Youtube%20Music%20Bot下載視頻/音樂' }],
+                        [{ text: '🎪 頻道 @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'zh-hans': {
-                message: "<b>🐹 Hamster Kombat: Telegram 上最热门的游戏！🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">立即加入</a> 并成为加密货币交易所的CEO！🚀\n\n"
-                    + "<b>🎁 独家奖金：</b>\n"
-                    + "- 🪙 <b>5,000 枚硬币</b> 作为欢迎礼。\n"
-                    + "- 🔥 <b>25,000 枚硬币</b> 给 Telegram Premium 用户。\n\n"
-                    + "<b>🌟 大师提示：</b>\n"
-                    + "- <b>专注于特殊卡片和组合的升级</b> 以增加每小时的利润。📈\n"
-                    + "- <b>每天监控新卡片</b> 并优化您的策略。🎴\n\n"
-                    + "<b>💡 记住：</b>\n"
-                    + "- <b>增加每小时的利润</b> 是关键。💰\n"
-                    + "- <b>结合并优化您的卡片</b> 以最大化收益。🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">现在开始</a> 并掌握 Hamster Kombat！🎮🚀",
+                message: '📢 <b>重要通知</b>\n\n'
+                    + '我们的机器人已经<b>部分上线</b>了！ 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube正在封锁许多机器人/视频下载网站，因此您可能仍会遇到上传错误。请在几分钟后重试或在其他频道寻找视频/音乐。 🎵</blockquote>\n\n'
+                    + '🐺 <b>加入我们的频道</b>以获取有关机器人的重要信息！ 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 开始游戏', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: '自动机器人', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ 分享', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20使用Youtube%20Music%20Bot下载视频/音乐' }],
+                        [{ text: '🎪 频道 @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'ru': {
-                message: "<b>🐹 Hamster Kombat: Самый ожидаемый игровой бот в Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Присоединяйтесь сейчас</a> и станьте CEO криптобиржи! 🚀\n\n"
-                    + "<b>🎁 Эксклюзивные Бонусы:</b>\n"
-                    + "- 🪙 <b>5 000 Монет</b> в качестве приветственного подарка.\n"
-                    + "- 🔥 <b>25 000 Монет</b> для пользователей Telegram Premium.\n\n"
-                    + "<b>🌟 Совет Мастера:</b>\n"
-                    + "- <b>Сосредоточьтесь на улучшении специальных карт и комбинаций</b> для увеличения вашей прибыли в час. 📈\n"
-                    + "- <b>Ежедневно отслеживайте новые карты</b> и оптимизируйте свои стратегии. 🎴\n\n"
-                    + "<b>💡 Помните:</b>\n"
-                    + "- <b>Увеличение часовой прибыли</b> имеет решающее значение. 💰\n"
-                    + "- <b>Комбинируйте и оптимизируйте свои карты</b> для максимизации доходов. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Начните сейчас</a> и покорите Hamster Kombat! 🎮🚀",
+                message: '📢 <b>Важное объявление</b>\n\n'
+                    + 'Наш бот снова <b>частично онлайн</b>! 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube блокирует многие боты/сайты для загрузки видео, поэтому вы все равно можете столкнуться с ошибками загрузки. Попробуйте снова через несколько минут или найдите видео/музыку на другом канале. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Присоединяйтесь к нашему каналу</b> для получения важной информации о боте! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Начать играть', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Автоматический бот', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Поделиться', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Скачивайте%20видео/музыку%20с%20помощью%20Youtube%20Music%20Bot' }],
+                        [{ text: '🎪 Канал @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'tr': {
-                message: "<b>🐹 Hamster Kombat: Telegram'ın en beklenen oyunu! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Şimdi katılın</a> ve bir kripto borsasının CEO'su olun! 🚀\n\n"
-                    + "<b>🎁 Özel Bonuslar:</b>\n"
-                    + "- 🪙 <b>5.000 Jeton</b> hoş geldin hediyesi.\n"
-                    + "- 🔥 <b>25.000 Jeton</b> Telegram Premium kullanıcıları için.\n\n"
-                    + "<b>🌟 Usta İpucu:</b>\n"
-                    + "- <b>Özel kartların ve kombinasyonların yükseltmelerine odaklanın</b> saatlik kazancınızı artırmak için. 📈\n"
-                    + "- <b>Yeni kartları günlük takip edin</b> ve stratejilerinizi optimize edin. 🎴\n\n"
-                    + "<b>💡 Unutmayın:</b>\n"
-                    + "- <b>Saatlik kazancı artırmak</b> çok önemlidir. 💰\n"
-                    + "- <b>Kartlarınızı birleştirin ve optimize edin</b> kazançlarınızı maksimize etmek için. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Şimdi başlayın</a> ve Hamster Kombat'ı fethedin! 🎮🚀",
+                message: '📢 <b>Önemli Uyarı</b>\n\n'
+                    + 'Botumuz tekrar <b>kısmen çevrimiçi</b>! 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube birçok bot/video indirme sitesini engelliyor, bu yüzden yükleme hatalarıyla karşılaşabilirsiniz. Birkaç dakika sonra tekrar deneyin veya videoyu/müziği başka bir kanaldan arayın. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Kanalımıza katılın</b> bot hakkında önemli bilgiler için! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Oyuna Başla', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Otomatik Bot', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Paylaş', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Youtube%20Music%20Bot%20ile%20videolar/müzikler%20indir' }],
+                        [{ text: '🎪 Kanal @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'it': {
-                message: "<b>🐹 Hamster Kombat: Il gioco più atteso su Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Unisciti ora</a> e diventa il CEO di una criptoexchange! 🚀\n\n"
-                    + "<b>🎁 Bonus Esclusivi:</b>\n"
-                    + "- 🪙 <b>5.000 Monete</b> di benvenuto.\n"
-                    + "- 🔥 <b>25.000 Monete</b> per utenti Telegram Premium.\n\n"
-                    + "<b>🌟 Consiglio del Maestro:</b>\n"
-                    + "- <b>Concentrati sugli upgrade di carte speciali e combo</b> per aumentare il tuo profitto orario. 📈\n"
-                    + "- <b>Monitora quotidianamente le nuove carte</b> e ottimizza le tue strategie. 🎴\n\n"
-                    + "<b>💡 Ricorda:</b>\n"
-                    + "- <b>Aumentare il profitto orario</b> è cruciale. 💰\n"
-                    + "- <b>Combina e ottimizza le tue carte</b> per massimizzare i guadagni. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Inizia ora</a> e domina Hamster Kombat! 🎮🚀",
+                message: '📢 <b>Avviso Importante</b>\n\n'
+                    + 'Il nostro bot è <b>parzialmente online</b> di nuovo! 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube sta bloccando molti bot/siti di download video, quindi potresti ancora incontrare errori di upload. Prova di nuovo tra qualche minuto o cerca il video/musica su un altro canale. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Unisciti al nostro canale</b> per informazioni importanti sul bot! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Inizia a giocare', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Bot automatico', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Condividi', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Scarica%20video/musica%20con%20il%20Youtube%20Music%20Bot' }],
+                        [{ text: '🎪 Canale @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'id': {
-                message: "<b>🐹 Hamster Kombat: Game paling ditunggu di Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Gabung sekarang</a> dan menjadi CEO dari sebuah kriptoexchange! 🚀\n\n"
-                    + "<b>🎁 Bonus Eksklusif:</b>\n"
-                    + "- 🪙 <b>5.000 Koin</b> sebagai hadiah selamat datang.\n"
-                    + "- 🔥 <b>25.000 Koin</b> untuk pengguna Telegram Premium.\n\n"
-                    + "<b>🌟 Tips dari Master:</b>\n"
-                    + "- <b>Fokus pada upgrade kartu spesial dan kombo</b> untuk meningkatkan keuntungan per jam Anda. 📈\n"
-                    + "- <b>Pantau setiap hari kartu-kartu baru</b> dan optimalkan strategi Anda. 🎴\n\n"
-                    + "<b>💡 Ingat:</b>\n"
-                    + "- <b>Meningkatkan keuntungan per jam</b> sangat penting. 💰\n"
-                    + "- <b>Kombinasikan dan optimalkan kartu Anda</b> untuk memaksimalkan keuntungan. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Mulai sekarang</a> dan taklukkan Hamster Kombat! 🎮🚀",
+                message: '📢 <b>Pemberitahuan Penting</b>\n\n'
+                    + 'Bot kami <b>sebagian online</b> lagi! 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube memblokir banyak bot/situs unduh video, jadi Anda masih mungkin menemukan kesalahan unggah. Cobalah lagi dalam beberapa menit atau cari video/musik di saluran lain. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Bergabunglah dengan saluran kami</b> untuk informasi penting tentang bot! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Mulai bermain', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Bot otomatis', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Bagikan', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Unduh%20video/musik%20dengan%20Youtube%20Music%20Bot' }],
+                        [{ text: '🎪 Kanal @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'fr': {
-                message: "<b>🐹 Hamster Kombat: Le jeu le plus attendu sur Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Rejoignez maintenant</a> et devenez le PDG d'une cryptoexchange! 🚀\n\n"
-                    + "<b>🎁 Bonus Exclusifs:</b>\n"
-                    + "- 🪙 <b>5 000 Pièces</b> en cadeau de bienvenue.\n"
-                    + "- 🔥 <b>25 000 Pièces</b> pour les utilisateurs Telegram Premium.\n\n"
-                    + "<b>🌟 Conseil de Maître:</b>\n"
-                    + "- <b>Concentrez-vous sur les mises à niveau de cartes spéciales et de combinaisons</b> pour augmenter votre profit par heure. 📈\n"
-                    + "- <b>Surveillez quotidiennement les nouvelles cartes</b> et optimisez vos stratégies. 🎴\n\n"
-                    + "<b>💡 Rappelez-vous:</b>\n"
-                    + "- <b>Augmenter le profit par heure</b> est crucial. 💰\n"
-                    + "- <b>Combinez et optimisez vos cartes</b> pour maximiser les gains. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">Commencez maintenant</a> et maîtrisez Hamster Kombat! 🎮🚀",
+                message: '📢 <b>Avis Important</b>\n\n'
+                    + 'Notre bot est <b>partiellement en ligne</b> à nouveau! 🎉\n\n'
+                    + '<blockquote>⚠️ YouTube bloque de nombreux bots/sites de téléchargement de vidéos, vous pourriez donc encore rencontrer des erreurs de téléchargement. Réessayez dans quelques minutes ou cherchez la vidéo/musique sur un autre canal. 🎵</blockquote>\n\n'
+                    + '🐺 <b>Rejoignez notre canal</b> pour des informations importantes sur le bot! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 Commencer à jouer', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'Bot automatique', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ Partager', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Téléchargez%20des%20vidéos/musique%20avec%20le%20Youtube%20Music%20Bot' }],
+                        [{ text: '🎪 Canal @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'hi': {
-                message: "<b>🐹 हैमस्टर कॉम्बैट: टेलीग्राम का सबसे हाइप्ड गेम! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">अभी शामिल हों</a> और एक क्रिप्टो एक्सचेंज के CEO बनें! 🚀\n\n"
-                    + "<b>🎁 विशेष बोनस:</b>\n"
-                    + "- 🪙 <b>5,000 सिक्के</b> स्वागत उपहार के रूप में।\n"
-                    + "- 🔥 <b>25,000 सिक्के</b> टेलीग्राम प्रीमियम उपयोगकर्ताओं के लिए।\n\n"
-                    + "<b>🌟 मास्टर की सलाह:</b>\n"
-                    + "- <b>विशेष कार्ड और कॉम्बो के अपग्रेड पर ध्यान केंद्रित करें</b> अपने प्रति घंटा लाभ को बढ़ाने के लिए। 📈\n"
-                    + "- <b>नए कार्डों को दैनिक रूप से निगरानी करें</b> और अपनी रणनीतियों को अनुकूलित करें। 🎴\n\n"
-                    + "<b>💡 याद रखें:</b>\n"
-                    + "- <b>प्रति घंटा लाभ बढ़ाना</b> महत्वपूर्ण है। 💰\n"
-                    + "- <b>अपने कार्डों को संयोजित करें और अनुकूलित करें</b> लाभ को अधिकतम करने के लिए। 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">अभी शुरू करें</a> और हैमस्टर कॉम्बैट को शासित करें! 🎮🚀",
+                message: '📢 <b>महत्वपूर्ण सूचना</b>\n\n'
+                    + 'हमारा बॉट <b>आंशिक रूप से ऑनलाइन</b> फिर से! 🎉\n\n'
+                    + '<blockquote>⚠️ यूट्यूब बहुत सारे बॉट/वीडियो डाउनलोड साइट्स को ब्लॉक कर रहा है, इसलिए आपको अपलोड की समस्याएं अभी भी मिल सकती हैं। कुछ मिनट बाद पुनः प्रयास करें या वीडियो/संगीत को दूसरे चैनल पर खोजें। 🎵</blockquote>\n\n'
+                    + '🐺 <b>हमारे चैनल में शामिल हों</b> बॉट के बारे में महत्वपूर्ण जानकारी के लिए! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 खेलना शुरू करें', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'स्वचालित बॉट', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ साझा करें', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20Youtube%20Music%20Bot%20के%20साथ%20वीडियो/संगीत%20डाउनलोड%20करें' }],
+                        [{ text: '🎪 चैनल @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
             'ar': {
-                message: "<b>🐹 Hamster Kombat: أكثر لعبة منتظرة في Telegram! 🔥</b><a href=\"https://i.ibb.co/mvYpcs0/becomeaceo.jpg\">⠀</a>\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">انضم الآن</a> وأصبح CEO لبورصة عملات رقمية! 🚀\n\n"
-                    + "<b>🎁 مكافآت حصرية:</b>\n"
-                    + "- 🪙 <b>5,000 عملة</b> كميرا حيا عليك.\n"
-                    + "- 🔥 <b>25,000 عملة</b> لمستخدمي Telegram Premium.\n\n"
-                    + "<b>🌟 نصيحة الماجستير:</b>\n"
-                    + "- <b>ركز على ترقيات البطاقات الخاصة والتوليفات</b> لزيادة الربح في الساعة. 📈\n"
-                    + "- <b>راقب البطاقات الجديدة يوميًا</b> وأضفف تحسينات على استراتيجياتك. 🎴\n\n"
-                    + "<b>💡 تذكر:</b>\n"
-                    + "- <b>زيادة الربح في الساعة</b> أمر حاسم. 💰\n"
-                    + "- <b>اجمع وأضفف تحسينات على بطاقاتك</b> لتعظيم الأرباح. 🛠️\n\n"
-                    + "<a href=\"https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670\">ابدأ الآن</a> وسيطر على Hamster Kombat! 🎮🚀",
+                message: '📢 <b>تنبيه مهم</b>\n\n'
+                    + 'بوتنا <b>جزئيًا على الإنترنت</b> مرة أخرى! 🎉\n\n'
+                    + '<blockquote>⚠️ يوتيوب يحظر العديد من البوتات/مواقع تحميل الفيديو، لذا قد تواجه أخطاء تحميل. حاول مرة أخرى بعد بضع دقائق أو ابحث عن الفيديو/الموسيقى على قناة أخرى. 🎵</blockquote>\n\n'
+                    + '🐺 <b>انضم إلى قناتنا</b> للحصول على معلومات مهمة حول البوت! 😊',
                 button: {
                     inline_keyboard: [
-                        [{ text: '🚀 ابدأ اللعب', url: 'https://t.me/hAmster_kombat_bot/start?startapp=kentId256311670' }],
-                        [{ text: 'بوت تلقائي', url: 'https://t.me/hamsterkombatupbot?start=256311670' }]
+                        [{ text: '⭐️ شارك', url: 'https://t.me/share/url?url=https://t.me/YoutubeMusicBetaBot&text=📥%20تنزيل%20الفيديوهات/الموسيقى%20باستخدام%20بوت%20Youtube%20Music' }],
+                        [{ text: '🎪 قناة @OsbornBots', url: 'https://t.me/OsbornBots' }]
                     ]
                 }
             },
@@ -258,16 +163,24 @@ class sendAlert {
             // Sincronizar Models
             await sequelize.sync();
 
+            const eightDaysAgo = new Date();
+            eightDaysAgo.setDate(eightDaysAgo.getDate() - 8);
+
             // Obter todos os usuários
             const users = await User.findAll({
                 where: {
                     status: true,
-                    //id_telegram: '256311670'
+                    // id_telegram: 256311670,
+                    // createdAt: {
+                    //     [Op.gte]: eightDaysAgo,
+                    // },
                 },
-                order: [
-                    ['createdAt', 'DESC']
-                ]
+                order: [['createdAt', 'DESC']]
             });
+
+            // console.log('Usórios encontrados:', users.length);
+            // process.exit();
+            // return;
 
             // Percorrer cada usuário e enviar a mensagem
             for (const user of users) {

@@ -15,8 +15,6 @@ const client = redis.createClient({
 
 client.connect();
 
-client.on('error', (err) => {
-    console.error('Erro ao conectar no Redis:', err);
-});
+client.on('error', (err) => console.error('Erro ao conectar no Redis:', err));
 
 module.exports = client;

@@ -126,7 +126,9 @@ class ffmpegClass {
                 this.onCompleteCallback(callbackObj);
 
             // Deleta o arquivo original após a conversão
-            setTimeout(() => fs.unlinkSync(this.input), 7000);
+            // try {
+            //     setTimeout(() => fs.unlinkSync(this.input), 7000);
+            // } catch (error) { }
         });
 
         return this;

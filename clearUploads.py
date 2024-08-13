@@ -19,10 +19,10 @@ for folder in folders:
     timestamp = os.path.getctime(folder_path)
     creation_date = datetime.fromtimestamp(timestamp)
 
-    # Limite de 30 minutos
-    limit = datetime.now() - timedelta(minutes=30) 
+    # Limite de 15 minutos
+    limit = datetime.now() - timedelta(minutes=15) 
 
-    # Se pasta foi criada a mais de 30 minutos, deleta
+    # Se pasta foi criada a mais de 15 minutos, deleta
     if creation_date < limit:  
         print(f'Deletando pasta antiga: {folder}')
         shutil.rmtree(folder_path)

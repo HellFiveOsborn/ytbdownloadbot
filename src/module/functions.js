@@ -87,7 +87,7 @@ async function editOrSendMessage(ctx, messageId = null, text, extraParams = {}, 
         resultMessage = await ctx.telegram.editMessageText(chatId, messageId, null, text, extraParams);
     } catch (error) {
         resultMessage = await ctx.reply(text, extraParams);
-        Logger.save(error, 'error');
+        Logger.error(error, error.stack);
     }
 
     if (useCache) {
@@ -142,7 +142,7 @@ async function sendPhotoOrMessage(ctx, photoUrl, extraParams = {}) {
         // Tenta enviar a foto
         return await ctx.telegram.sendPhoto(ctx.chat.id, photoUrl, extraParams);
     } catch (error) {
-        Logger.save(error, 'error');
+        Logger.error(error, error.stack);
         // Se a foto não puder ser enviada, envia como mensagem com link da foto
         const photoLink = extraParams.parse_mode === 'HTML' ? `<a href="${photoUrl}">&#8203;</a>` : `[&#8203;](${photoUrl})`;
         const messageText = (extraParams.caption ? extraParams.caption + ' ' : '') + photoLink;
@@ -169,7 +169,7 @@ async function sendPhotoOrMessage(ctx, photoUrl, extraParams = {}) {
 async function sendAudioOrVideo(ctx, fileSource, extraParams = {}) {
     const isFileId = typeof fileSource === 'string' && !fileSource.includes('.');
     let method, chatAction;
-    if (isFileId) {
+    if (isFileId && !fileSource.startsWith('http')) {
         method = 'sendAudio', chatAction = 'upload_voice';
     } else {
         const ext = fileSource.slice(-4).toLowerCase();
@@ -184,13 +184,13 @@ async function sendAudioOrVideo(ctx, fileSource, extraParams = {}) {
         await ctx.sendChatAction(chatAction)
             .then(async () => {
                 extraParams.parse_mode = extraParams.parse_mode || 'Markdown';
-                const payload = isFileId ? fileSource : { source: fileSource };
+                const payload = (isFileId || fileSource.startsWith('http')) ? fileSource : { source: fileSource };
                 response = await ctx.telegram[method](ctx.chat.id, payload, extraParams);
             });
-
         return response;
     } catch (error) {
-        Logger.save(error, 'error');
+        console.log(error)
+        Logger.error(error, error.stack);
         throw error;
     }
 }
@@ -236,6 +236,10 @@ async function redisRemember(key, callback, expiration = null) {
         await redisClient.set(key, valueToStore);
     }
     return value;
+}
+
+function redisDestroy(key) {
+    redisClient.del(key);
 }
 
 /**
@@ -390,7 +394,7 @@ function lang(key, lang = 'en', replacements = {}) {
         const langsFileContent = fs.readFileSync(langsFilePath, 'utf8');
         translations = JSON.parse(langsFileContent);
     } catch (error) {
-        Logger.save({ message: 'Erro ao ler o arquivo de traduções '.lang, error }, 'error');
+        Logger.error({ message: 'Erro ao ler o arquivo de traduções '.lang, error }, error.stack);
         const langsFileContent = fs.readFileSync(resolve_path(`langs/en.json`), 'utf8');
         translations = JSON.parse(langsFileContent);
     }
@@ -649,7 +653,7 @@ async function curlRequest(endpoint, method, data = {}, headers = {}) {
             body
         };
     } catch (error) {
-        Logger.save({ message: 'Request failed', error }, 'error');
+        Logger.error({ message: 'Request failed', error }, error.stack);
         throw error;
     }
 }
@@ -674,6 +678,7 @@ module.exports = {
     updateTypeOrigin,
     sleep,
     redisRemember,
+    redisDestroy,
     redisRecovery,
     redisProcesses,
 }

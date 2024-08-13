@@ -19,11 +19,17 @@ RUN apt-get install -y python3 && \
     apt-get install -y ffmpeg && \
     apt-get install -y jq && \
     apt-get install -y curl && \
-    apt-get install -y wget
-    
+    apt-get install -y wget && \
+    apt-get install -y redis-server \
+    apt-get install -y nano && \
+    apt-get install -y crontab
+
 # Install yt-dlp using curl
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp
+
+# Define environment variable
+ENV NODE_ENV=production
 
 # Copy the current directory contents into the container at /usr/src/app
 COPY . .
@@ -32,10 +38,8 @@ COPY . .
 RUN npm install
 
 # Make port available to the world outside this container
-EXPOSE 3900
+EXPOSE 3002
 
-# Define environment variable
-ENV NODE_ENV=production
+# Start Redis server and then your application
+ENTRYPOINT ["sh", "-c", "service redis-server start && node --trace-deprecation app.js"]
 
-# Run app.py when the container launches
-CMD ["tail", "-f", "/dev/null"]
