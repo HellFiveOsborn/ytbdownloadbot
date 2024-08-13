@@ -20,9 +20,7 @@ RUN apt-get install -y python3 && \
     apt-get install -y jq && \
     apt-get install -y curl && \
     apt-get install -y wget && \
-    apt-get install -y redis-server \
-    apt-get install -y nano && \
-    apt-get install -y crontab
+    apt-get install -y redis-server
 
 # Install yt-dlp using curl
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
